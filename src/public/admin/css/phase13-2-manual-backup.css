@@ -1,0 +1,29 @@
+#backup-status .danger-btn,
+#runManualBackupBtn {
+  background: #b91c1c;
+  color: #ffffff;
+  border: 0;
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+#backup-status .danger-btn:disabled,
+#runManualBackupBtn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+#backup-status .manual-backup-card {
+  border: 1px solid #fecaca;
+}
+
+#backup-status .manual-backup-warning {
+  color: #991b1b;
+  font-weight: 700;
+}
+
+#backup-status .manual-backup-metrics {
+  margin-top: 12px;
+}

@@ -1,0 +1,1745 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Arial, Helvetica, sans-serif;
+  background: #f4f6f8;
+  color: #1f2937;
+}
+
+.admin-layout {
+  display: flex;
+  min-height: 100vh;
+}
+
+.sidebar {
+  width: 260px;
+  background: #111827;
+  color: #ffffff;
+  padding: 24px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 32px;
+}
+
+.brand-mark {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: #2563eb;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+}
+
+.brand h1 {
+  font-size: 16px;
+  margin: 0;
+}
+
+.brand p {
+  font-size: 12px;
+  color: #9ca3af;
+  margin: 4px 0 0;
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.nav-item {
+  color: #d1d5db;
+  text-decoration: none;
+  padding: 12px 14px;
+  border-radius: 10px;
+  font-size: 14px;
+}
+
+.nav-item:hover,
+.nav-item.active {
+  background: #1f2937;
+  color: #ffffff;
+}
+
+.main {
+  flex: 1;
+  padding: 28px;
+  overflow: auto;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 28px;
+}
+
+.topbar h2 {
+  margin: 0;
+  font-size: 26px;
+}
+
+.topbar p {
+  margin: 6px 0 0;
+  color: #6b7280;
+}
+
+.section {
+  background: #ffffff;
+  border-radius: 16px;
+  padding: 22px;
+  margin-bottom: 22px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+}
+
+.section-title h3 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.section-title p {
+  margin: 6px 0 18px;
+  color: #6b7280;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 16px;
+}
+
+.card {
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  padding: 18px;
+  background: #f9fafb;
+}
+
+.card .label {
+  display: block;
+  color: #6b7280;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.card strong {
+  font-size: 20px;
+}
+
+.toolbar {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+button {
+  border: 0;
+  border-radius: 10px;
+  padding: 10px 14px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.primary-btn {
+  background: #2563eb;
+  color: white;
+}
+
+.secondary-btn {
+  background: #e5e7eb;
+  color: #111827;
+}
+
+.danger-btn {
+  background: #dc2626;
+  color: white;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+th,
+td {
+  padding: 12px;
+  border-bottom: 1px solid #e5e7eb;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  background: #f9fafb;
+  color: #374151;
+}
+
+.notice {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #1e40af;
+  padding: 14px;
+  border-radius: 12px;
+}
+
+.raw-output {
+  background: #111827;
+  color: #d1d5db;
+  padding: 16px;
+  border-radius: 12px;
+  min-height: 160px;
+  overflow: auto;
+}
+
+.status-ok {
+  color: #059669;
+}
+
+.status-error {
+  color: #dc2626;
+}
+
+.status-warning {
+  color: #d97706;
+}
+
+@media (max-width: 900px) {
+  .admin-layout {
+    flex-direction: column;
+  }
+
+  .sidebar {
+    width: 100%;
+  }
+
+  .cards {
+    grid-template-columns: 1fr;
+  }
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.badge-ok {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.badge-warning {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.badge-error {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.badge-muted {
+  background: #e5e7eb;
+  color: #374151;
+}
+
+.preview-cell {
+  max-width: 460px;
+  white-space: normal;
+  line-height: 1.5;
+}
+
+.input {
+  min-width: 180px;
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 14px;
+  outline: none;
+}
+
+.input:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+.memory-toolbar {
+  flex-wrap: wrap;
+}
+
+.result-info {
+  color: #6b7280;
+  font-size: 14px;
+  margin: 8px 0 14px;
+}
+
+.detail-panel {
+  margin-top: 22px;
+  border-top: 1px solid #e5e7eb;
+  padding-top: 18px;
+}
+
+.small-btn {
+  background: #f3f4f6;
+  color: #111827;
+  font-size: 12px;
+  padding: 7px 10px;
+  border-radius: 8px;
+}
+
+.small-btn:hover {
+  background: #e5e7eb;
+}
+
+.action-cell {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.warning-btn {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.warning-btn:hover {
+  background: #fde68a;
+}
+
+.danger-small-btn {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.danger-small-btn:hover {
+  background: #fecaca;
+}
+
+.manual-memory-panel {
+  margin-top: 22px;
+  border-top: 1px solid #e5e7eb;
+  padding-top: 18px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.form-field span {
+  font-size: 13px;
+  font-weight: 700;
+  color: #374151;
+}
+
+.full-width {
+  grid-column: 1 / -1;
+}
+
+.textarea {
+  width: 100%;
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 14px;
+  font-family: Arial, Helvetica, sans-serif;
+  resize: vertical;
+  outline: none;
+}
+
+.textarea:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+@media (max-width: 900px) {
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.queue-toolbar {
+  flex-wrap: wrap;
+}
+
+.mini-output-panel {
+  margin: 10px 0 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #f9fafb;
+}
+
+.mini-output-title {
+  padding: 10px 12px;
+  font-weight: 800;
+  font-size: 13px;
+  color: #374151;
+  border-bottom: 1px solid #e5e7eb;
+  background: #f3f4f6;
+}
+
+.mini-output {
+  margin: 0;
+  padding: 12px;
+  min-height: 70px;
+  max-height: 220px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  color: #111827;
+}
+
+.error-cell {
+  max-width: 320px;
+  white-space: normal;
+  color: #991b1b;
+  line-height: 1.5;
+}
+
+.queue-summary-cards {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(120px, 1fr));
+  gap: 12px;
+  margin: 12px 0 16px;
+}
+
+.mini-card {
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+  border-radius: 12px;
+  padding: 14px;
+}
+
+.mini-card span {
+  display: block;
+  color: #6b7280;
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+
+.mini-card strong {
+  font-size: 22px;
+  color: #111827;
+}
+
+.failed-card strong {
+  color: #dc2626;
+}
+
+@media (max-width: 900px) {
+  .queue-summary-cards {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.assets-toolbar {
+  flex-wrap: wrap;
+}
+
+.conversation-toolbar {
+  flex-wrap: wrap;
+}
+
+.context-toolbar {
+  flex-wrap: wrap;
+}
+
+
+.health-overview {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  padding: 18px;
+  margin-bottom: 18px;
+  background: #f9fafb;
+  flex-wrap: wrap;
+}
+
+.health-overview .label,
+.card-note {
+  display: block;
+  color: #6b7280;
+  font-size: 13px;
+  margin-top: 8px;
+}
+
+.health-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 13px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.health-status-good {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.health-status-warning {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.health-status-error {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.health-status-muted {
+  background: #e5e7eb;
+  color: #374151;
+}
+
+.health-cards {
+  margin-bottom: 18px;
+}
+
+.health-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.mini-output {
+  margin: 10px 0 0;
+  width: 100%;
+  max-width: 100%;
+  min-height: 70px;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  background: #f3f4f6;
+  color: #111827;
+  padding: 12px;
+  border-radius: 10px;
+}
+
+.health-detail-grid .card {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.health-detail-grid pre {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.health-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.health-history-panel {
+  margin-top: 22px;
+}
+
+.compact-title {
+  margin-top: 4px;
+  margin-bottom: 12px;
+}
+
+.compact-title h3 {
+  margin-bottom: 4px;
+}
+
+#dailyHealthSaveResult.status-ok {
+  color: #059669;
+  font-weight: 700;
+}
+
+#dailyHealthSaveResult.status-error {
+  color: #dc2626;
+  font-weight: 700;
+}
+
+@media (max-width: 700px) {
+  .health-actions {
+    justify-content: flex-start;
+  }
+}
+
+/* Phase 9-3: Daily Operation Checklist */
+.operation-checklist-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 16px;
+  padding: 16px;
+  margin-bottom: 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  background: #ffffff;
+}
+
+.operation-checklist-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.operation-summary-cards {
+  margin-bottom: 16px;
+}
+
+.operation-checklist-wrap td {
+  vertical-align: middle;
+}
+
+.operation-note-input {
+  min-width: 220px;
+  width: 100%;
+}
+
+.operation-check-input {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+}
+
+.checklist-done-row {
+  background: #f0fdf4;
+}
+
+.checklist-done-row td {
+  color: #166534;
+}
+
+.small-btn {
+  padding: 7px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+@media (max-width: 768px) {
+  .operation-checklist-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .operation-checklist-actions {
+    justify-content: flex-start;
+  }
+}
+
+/* Phase 9-4: Summary Queue Operation Stabilization */
+.small-input {
+  max-width: 90px;
+}
+
+.queue-operation-note {
+  margin: 10px 0 14px;
+  padding: 10px 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 10px;
+  background: #eff6ff;
+  color: #1e3a8a;
+  font-size: 13px;
+}
+
+.danger-small-btn {
+  border-color: #fecaca;
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.queue-select-checkbox,
+#selectAllQueueCheckbox {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.queue-toolbar {
+  flex-wrap: wrap;
+}
+
+/* Phase 9-5: Daily Operation Automation */
+.automation-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.automation-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.automation-note-row {
+  padding: 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  background: #ffffff;
+}
+
+.automation-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.switch-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 13px;
+  color: #334155;
+}
+
+.switch-line input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.table-mini-pre {
+  margin: 0;
+  max-width: 260px;
+  max-height: 90px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  line-height: 1.4;
+  background: #f8fafc;
+  border-radius: 8px;
+  padding: 8px;
+}
+
+@media (max-width: 768px) {
+  .automation-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+/* Phase 9-6: Operation Logs + Safety */
+.operation-log-create-panel,
+.operation-log-filter-row {
+  padding: 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  background: #ffffff;
+  margin-top: 16px;
+}
+
+.operation-log-filter-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+#operation-logs .health-detail-grid {
+  margin-top: 16px;
+}
+
+#operation-logs .form-grid {
+  margin-top: 10px;
+}
+
+#operation-logs .table-wrap {
+  margin-top: 16px;
+}
+
+#automationSafetyStatus.health-status-error,
+#automationSafetyStatus.health-status-warning,
+#automationSafetyStatus.health-status-good {
+  display: inline-block;
+}
+
+/* Phase 9-7: Operation Report Summary + Final Checklist */
+.report-toolbar {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.report-overview {
+  margin-top: 14px;
+}
+
+#operation-report .health-detail-grid {
+  margin-top: 16px;
+}
+
+#operation-report .operation-checklist-wrap {
+  margin-top: 16px;
+}
+
+.phase9-final-note {
+  min-width: 220px;
+}
+
+#operationReportDecision {
+  min-height: 110px;
+}
+
+/* Phase 9 Final Decision */
+.full-card {
+  grid-column: 1 / -1;
+}
+
+#phase9FinalDecisionOutput {
+  max-height: 320px;
+}
+
+/* Phase 10-1 Context Build */
+.context-build-cards {
+  margin-top: 16px;
+}
+
+.compact-title {
+  margin-bottom: 10px;
+}
+
+#contextBuildTextOutput {
+  max-height: 420px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+#contextBuildOutput {
+  max-height: 520px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Phase 10-2 Context Preview Advanced */
+.context-preview-cards {
+  margin-top: 16px;
+}
+
+.context-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+
+#contextPreviewQualityOutput,
+#contextPreviewKeywordOutput,
+#contextPreviewLayerCardsOutput,
+#contextPreviewPromptOutput,
+#contextPreviewOutput {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+#contextPreviewQualityOutput,
+#contextPreviewKeywordOutput {
+  max-height: 300px;
+}
+
+#contextPreviewLayerCardsOutput {
+  max-height: 520px;
+}
+
+#contextPreviewPromptOutput {
+  max-height: 520px;
+}
+
+#contextPreviewOutput {
+  max-height: 560px;
+}
+
+/* Phase 10-3 AI Request Pipeline Draft */
+.pipeline-draft-cards {
+  margin-top: 16px;
+  margin-bottom: 16px;
+}
+
+#pipelineExecutionPlanOutput,
+#pipelineWarningsOutput,
+#pipelinePayloadOutput,
+#pipelineDraftOutput {
+  max-height: 460px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Phase 10-4: Context Assembly + Layout Fixes */
+.context-assembly-cards {
+  margin-top: 16px;
+  margin-bottom: 16px;
+}
+
+#assemblyTraceOutput,
+#assemblyWarningsOutput,
+#assemblyPromptOutput,
+#assemblyOutput {
+  max-height: 520px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#assemblyPromptOutput {
+  max-height: 620px;
+}
+
+/* Prevent long status/model strings from escaping metric cards. */
+.metric-card,
+.card,
+.health-card {
+  min-width: 0;
+}
+
+.metric-card strong,
+.card strong,
+.health-card strong {
+  display: block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+  line-height: 1.25;
+}
+
+.pipeline-draft-cards .metric-card strong,
+.context-assembly-cards .metric-card strong {
+  font-size: 18px;
+}
+
+.pipeline-draft-cards #pipelineReadinessStatus {
+  font-size: 15px;
+}
+
+.floating-top-btn {
+  position: fixed;
+  left: 18px;
+  bottom: 18px;
+  z-index: 9999;
+  border: 0;
+  border-radius: 999px;
+  padding: 10px 14px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18);
+  background: #ffffff;
+  color: #0f172a;
+}
+
+.floating-top-btn:hover {
+  transform: translateY(-1px);
+}
+
+@media (max-width: 760px) {
+  .floating-top-btn {
+    left: 12px;
+    bottom: 12px;
+    padding: 9px 12px;
+  }
+}
+
+
+.response-test-cards .metric-card strong,
+.pipeline-draft-cards .metric-card strong {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.2;
+}
+
+.answer-output {
+  min-height: 160px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Phase 10-6 Response Storage */
+.response-storage-cards .metric-card,
+.response-test-cards .metric-card {
+  min-width: 150px;
+}
+
+.response-storage-cards strong,
+.response-test-cards strong {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+/* Phase 10-7 Summary Worker */
+#summary-worker .metric-card strong {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#summary-worker .raw-output {
+  max-height: 420px;
+}
+
+/* Phase 10 Final */
+#phase10-final .metric-card strong {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.25;
+}
+
+#phase10-final .raw-output {
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#phase10-final .data-table td {
+  vertical-align: top;
+}
+
+#phase10-final .wide-field {
+  grid-column: 1 / -1;
+}
+
+
+/* Phase 10 completion supplement: keep long final status values inside cards */
+#phase10-final .metric-card strong,
+#phase10-final .raw-output {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.phase-final-safe-wrap {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Phase 11-1 Model Provider Interface */
+#model-providers .data-table td,
+#model-providers .data-table th {
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#model-providers .metric-card strong {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.full-width-field {
+  display: block;
+  margin: 14px 0;
+}
+
+.muted-text {
+  color: #64748b;
+  font-size: 12px;
+}
+
+/* Phase 11-2 OpenAI Live Safety */
+.danger-outline-btn {
+  border: 1px solid #dc2626;
+  background: #fff;
+  color: #dc2626;
+  border-radius: 8px;
+  padding: 9px 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.danger-outline-btn:hover {
+  background: #fef2f2;
+}
+
+.phase11-live-panel .raw-output,
+#openAiLiveStatusOutput,
+#anthropicLiveStatusOutput,
+#geminiLiveStatusOutput,
+#openAiAvailableModelsOutput,
+#anthropicAvailableModelsOutput,
+#geminiAvailableModelsOutput,
+#providerTestOutput,
+#modelProviderJsonOutput {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+#model-providers .metric-card strong {
+  line-height: 1.25;
+}
+
+/* Phase 11-5 Provider Router */
+#provider-router .data-table td,
+#provider-router .data-table th {
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#provider-router .metric-card strong,
+#provider-router .raw-output {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+
+/* Phase 11-6: AI Response Test provider-router hardening */
+.response-test-cards .metric-card strong {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.25;
+}
+#responseTestRouterOutput {
+  max-height: 420px;
+  overflow: auto;
+}
+
+/* Phase 12-1: Admin Security */
+.status-good-text {
+  color: #15803d;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.status-warning-text {
+  color: #b45309;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.status-error-text,
+.error-text {
+  color: #b91c1c;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.wrap-cell {
+  max-width: 360px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Phase 12-2 Admin Permissions */
+.compact-form-grid {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.wrap-cell code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Phase 12-3 Dangerous Actions */
+.danger-panel {
+  border-color: #fecaca;
+  background: #fff7f7;
+}
+
+#dangerous-actions code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#dangerous-actions .mini-output,
+#dangerous-actions .raw-output {
+  max-width: 100%;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Phase 12-4 API Error Standardization */
+#api-errors .raw-output,
+#api-errors pre {
+  max-width: 100%;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+#api-errors .metric-card strong {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Phase 12-6 Production Deployment Checklist */
+#deployment-checklist .raw-output,
+#deployment-checklist pre {
+  max-width: 100%;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+#deployment-checklist .metric-card strong,
+#deployment-checklist .wrap-cell {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#deployment-checklist .data-table td {
+  vertical-align: top;
+}
+
+/* ======================================================
+   Phase 12-7: Admin Console Production Mode / Dev Mode
+   ====================================================== */
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.mode-badge {
+  display: inline-flex;
+  align-items: center;
+  max-width: 260px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  background: #f8fafc;
+  color: #334155;
+}
+
+.mode-badge.mode-good {
+  background: #dcfce7;
+  color: #166534;
+  border-color: #86efac;
+}
+
+.mode-badge.mode-warning {
+  background: #fef3c7;
+  color: #92400e;
+  border-color: #fcd34d;
+}
+
+.mode-badge.mode-error {
+  background: #fee2e2;
+  color: #991b1b;
+  border-color: #fca5a5;
+}
+
+.nav-item.developer-menu-item::after {
+  content: "DEV";
+  margin-left: auto;
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 999px;
+  background: rgba(99, 102, 241, 0.12);
+  color: #4f46e5;
+  font-weight: 700;
+}
+
+.nav-item.developer-menu-hidden {
+  display: none !important;
+}
+
+.console-dev-override-active .nav-item.developer-menu-item::after {
+  content: "DEV ON";
+  background: rgba(16, 185, 129, 0.16);
+  color: #047857;
+}
+
+.console-production-mode .section-title p::selection,
+.console-development-mode .section-title p::selection {
+  background: rgba(59, 130, 246, 0.22);
+}
+
+#adminConsoleModeSummaryOutput,
+#adminConsoleDevMenuOutput,
+#adminConsoleModeFullJson {
+  max-width: 100%;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Phase 13-1: Database Backup Status */
+.grid-2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+  margin: 16px 0;
+}
+
+.panel-card {
+  border: 1px solid #dfe5ee;
+  border-radius: 14px;
+  background: #ffffff;
+  padding: 16px;
+  overflow: hidden;
+}
+
+.panel-card h4 {
+  margin: 0 0 12px 0;
+  font-size: 15px;
+}
+
+#backup-status .mini-output,
+#backup-status .raw-output {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+#backup-status table td,
+#backup-status table th {
+  vertical-align: top;
+}
+
+/* Phase 13-2: Manual DB Backup */
+#backup-status .danger-panel {
+  border: 1px solid rgba(220, 38, 38, 0.25);
+  background: rgba(254, 242, 242, 0.55);
+}
+#backup-status .danger-btn {
+  background: #dc2626;
+  color: #fff;
+  border: 0;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+#backup-status .danger-btn:hover {
+  filter: brightness(0.95);
+}
+#manualBackupOutput {
+  max-height: 360px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Phase 13-3 Backup History */
+.wrap-cell {
+  max-width: 260px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.nested-panel {
+  margin-top: 12px;
+  box-shadow: none;
+}
+
+#backupHistoryOutput,
+#backupHistoryStatsOutput {
+  max-height: 360px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ======================================================
+   Phase 13-3A: Admin UI layout/CSS restore for grouped menu
+   and Backup / Monitoring panels
+   ====================================================== */
+.sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.grouped-nav,
+.nav.grouped-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.nav-group-title {
+  display: block;
+  margin: 8px 0 3px;
+  padding: 0 4px;
+  color: #f9fafb;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+}
+
+.nav-group .nav-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 34px;
+  padding: 9px 12px;
+  line-height: 1.25;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: keep-all;
+}
+
+.nav-group .nav-item::after {
+  flex: 0 0 auto;
+}
+
+.nav-group + .nav-group {
+  padding-top: 4px;
+  border-top: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.action-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 12px 0 16px;
+}
+
+.action-row button,
+.toolbar button,
+.health-actions button {
+  white-space: nowrap;
+}
+
+button:disabled,
+button.is-loading {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
+  gap: 14px;
+  margin: 16px 0;
+}
+
+.metric-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  padding: 16px;
+  background: #f9fafb;
+  min-width: 0;
+}
+
+.metric-card span {
+  display: block;
+  color: #6b7280;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.metric-card strong {
+  display: block;
+  color: #111827;
+  font-size: 20px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.form-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  color: #374151;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.form-grid input,
+.form-grid select,
+.form-grid textarea,
+#backup-status input,
+#backup-status select {
+  width: 100%;
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  padding: 9px 11px;
+  font-size: 14px;
+  background: #ffffff;
+  color: #111827;
+}
+
+.muted-text {
+  color: #6b7280;
+  font-size: 14px;
+  line-height: 1.5;
+  margin: 0 0 14px;
+}
+
+#backup-status .section-title p,
+#backup-status .result-info {
+  line-height: 1.5;
+}
+
+#backup-status .panel-card {
+  min-width: 0;
+}
+
+#backup-status .table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+#backup-status table {
+  min-width: 100%;
+}
+
+#backup-status .raw-output,
+#backup-status .mini-output {
+  font-family: Consolas, Monaco, 'Courier New', monospace;
+}
+
+#backupOverallStatus.status-ok,
+#backupHistoryStatus.status-ok {
+  color: #15803d;
+}
+
+#backupOverallStatus.status-warning,
+#backupHistoryStatus.status-warning {
+  color: #b45309;
+}
+
+#backupOverallStatus.status-error,
+#backupHistoryStatus.status-error {
+  color: #b91c1c;
+}
+
+@media (max-width: 900px) {
+  .sidebar {
+    position: relative;
+    height: auto;
+  }
+
+  .grouped-nav,
+  .nav.grouped-nav {
+    gap: 12px;
+  }
+
+  .nav-group .nav-item {
+    min-height: 36px;
+  }
+
+  .metrics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .metrics-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .action-row button {
+    width: 100%;
+  }
+}
+
+/* Phase 13-6 Resource Monitoring */
+#resource-monitoring .metric-card strong {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.2;
+}
+#resource-monitoring .mini-output,
+#resource-monitoring .raw-output {
+  max-width: 100%;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Phase 14-1 Smoke Test */
+#phase14-smoke-test .full-width-label {
+  display: block;
+  margin: 14px 0;
+}
+#phase14-smoke-test textarea {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+#phase14-smoke-test .metric-card strong {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* ======================================================
+   Phase 14-2: Production Admin Menu Cleanup
+   ====================================================== */
+.menu-cleanup-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+.menu-cleanup-group-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 12px;
+  background: #ffffff;
+  overflow-wrap: anywhere;
+}
+.menu-cleanup-group-card strong {
+  display: block;
+  margin-bottom: 6px;
+  color: #111827;
+}
+.menu-cleanup-group-card p {
+  margin: 0;
+  color: #4b5563;
+  line-height: 1.5;
+}
+.menu-cleanup-group-card small {
+  display: block;
+  margin-top: 8px;
+  color: #6b7280;
+}
+.console-production-mode .developer-menu-hidden,
+.developer-menu-hidden {
+  display: none !important;
+}
+
+/* Phase 14-3: Final developer diagnostic menu hide policy */
+.nav-group.developer-nav-group[aria-hidden="true"],
+body.production-dev-hidden .developer-nav-group,
+body.production-dev-hidden [data-menu-group="developer-diagnostic"] {
+  display: none !important;
+}
+
+.mode-badge.mode-production {
+  background: #dcfce7;
+  color: #166534;
+  border: 1px solid #86efac;
+}
+
+.mode-badge.mode-development {
+  background: #eef2ff;
+  color: #3730a3;
+  border: 1px solid #c7d2fe;
+}
+
+#phase14-dev-menu-final .raw-output {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+
+/* Phase 14-4 Operator Manual styles */
+#phase14-operator-manual .raw-output,
+#phase14-operator-manual .mini-output {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+/* Phase 14 Final */
+#phase14-final .raw-output {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
+}
+#phase14-final .metric-card strong {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Phase 15-1 Imported Conversation Storage */
+#imported-conversations .mini-output {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-height: 520px;
+  overflow: auto;
+}
+#imported-conversations .wrap-cell {
+  max-width: 520px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* Phase 15-2 ChatGPT Importer */
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.form-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: #374151;
+}
+
+.form-grid input {
+  min-height: 36px;
+  padding: 8px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-size: 14px;
+}
