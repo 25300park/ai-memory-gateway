@@ -2,7 +2,7 @@
 
 /**
  * Phase 17 Personal Agent Service
- * Phase 17-4: Provider Router / Real AI Response Connection
+ * Phase 17-5: Automatic Question / Answer Storage Hardening
  *
  * This version keeps the Phase 17-3 memory-context flow and adds a provider
  * execution layer. In safe mode it uses provider-router dry-run/mock output;
@@ -85,6 +85,134 @@ async function ensureColumn(db, tableName, columnName, definition) {
   }
 }
 
+
+async function countRows(db, tableName, whereSql = '', params = []) {
+  try {
+    if (!(await tableExists(db, tableName))) return 0;
+    const [rows] = await db.query(`SELECT COUNT(*) AS cnt FROM ${tableName} ${whereSql}`, params);
+    return Number(rows[0]?.cnt || 0);
+  } catch (_) {
+    return 0;
+  }
+}
+
+function buildAgentSessionId(projectCode, payload = {}) {
+  if (payload.session_id) return String(payload.session_id).trim().slice(0, 180);
+  const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  return `agent-${projectCode || 'auto'}-${date}`;
+}
+
+function summarizeAnswer(answer = '') {
+  return String(answer || '').replace(/\s+/g, ' ').slice(0, 500);
+}
+
+async function getNextAgentTurnNo(db, sessionId) {
+  try {
+    const [rows] = await db.query(
+      `SELECT COALESCE(MAX(agent_turn_no), 0) + 1 AS next_turn
+       FROM personal_agent_interactions
+       WHERE agent_session_id = ?`,
+      [sessionId]
+    );
+    return Number(rows[0]?.next_turn || 1);
+  } catch (_) {
+    return 1;
+  }
+}
+
+async function saveAgentConversationLog(db, payload = {}) {
+  if (!(await tableExists(db, 'ai_conversation_logs'))) {
+    return { ok: false, skipped: true, reason: 'ai_conversation_logs table not found' };
+  }
+
+  const projectCode = payload.project_code || 'ai_memory_gateway';
+  const sessionId = payload.session_id || buildAgentSessionId(projectCode, payload);
+  const answer = String(payload.answer || '');
+  const question = String(payload.question || '');
+  const contextSummary = String(payload.context_summary || '');
+  const rawText = [
+    '# Personal AI Agent Interaction',
+    `Project: ${projectCode}`,
+    `Provider: ${payload.provider_used || ''}`,
+    `Model: ${payload.provider_model || ''}`,
+    '',
+    '## User Question',
+    question,
+    '',
+    '## Memory Context Summary',
+    contextSummary || '(No context summary)',
+    '',
+    '## Agent Answer',
+    answer
+  ].join('\n');
+
+  try {
+    const [result] = await db.query(
+      `INSERT INTO ai_conversation_logs (
+         project_code,
+         session_id,
+         source_ai,
+         conversation_title,
+         user_message,
+         assistant_message,
+         raw_text,
+         summary,
+         model_name,
+         token_count,
+         status
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        projectCode,
+        sessionId,
+        payload.provider_used || 'personal_agent',
+        payload.conversation_title || `Personal Agent - ${projectCode}`,
+        question,
+        answer,
+        rawText,
+        summarizeAnswer(answer),
+        payload.provider_model || payload.provider_used || 'agent-router',
+        0,
+        'active'
+      ]
+    );
+
+    return { ok: true, conversation_log_id: Number(result.insertId), session_id: sessionId };
+  } catch (error) {
+    return { ok: false, skipped: false, error: error.message, code: error.code };
+  }
+}
+
+async function queueAgentConversationForSummary(db, conversationLogId, projectCode, payload = {}) {
+  if (!conversationLogId) return { ok: false, skipped: true, reason: 'conversation_log_id missing' };
+  if (!(await tableExists(db, 'ai_summary_queue'))) {
+    return { ok: false, skipped: true, reason: 'ai_summary_queue table not found' };
+  }
+
+  try {
+    const [result] = await db.query(
+      `INSERT INTO ai_summary_queue (
+         conversation_log_id,
+         project_code,
+         source_ai,
+         summary_model,
+         status,
+         priority
+       ) VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        conversationLogId,
+        projectCode || 'ai_memory_gateway',
+        payload.provider_used || 'personal_agent',
+        payload.summary_model || 'gpt-4o-mini',
+        'pending',
+        Number(payload.priority || 4)
+      ]
+    );
+    return { ok: true, summary_queue_id: Number(result.insertId) };
+  } catch (error) {
+    return { ok: false, skipped: false, error: error.message, code: error.code };
+  }
+}
+
 async function ensureTables(db) {
   await db.query(`
     CREATE TABLE IF NOT EXISTS personal_agent_interactions (
@@ -118,6 +246,15 @@ async function ensureTables(db) {
   await ensureColumn(db, 'personal_agent_interactions', 'provider_response_payload', 'LONGTEXT NULL AFTER provider_route_payload');
   await ensureColumn(db, 'personal_agent_interactions', 'provider_live_requested', 'TINYINT(1) DEFAULT 0 AFTER provider_response_payload');
   await ensureColumn(db, 'personal_agent_interactions', 'provider_fallback_used', 'TINYINT(1) DEFAULT 0 AFTER provider_live_requested');
+  await ensureColumn(db, 'personal_agent_interactions', 'agent_session_id', 'VARCHAR(180) NULL AFTER id');
+  await ensureColumn(db, 'personal_agent_interactions', 'agent_turn_no', 'INT DEFAULT 1 AFTER agent_session_id');
+  await ensureColumn(db, 'personal_agent_interactions', 'conversation_log_id', 'BIGINT UNSIGNED NULL AFTER provider_fallback_used');
+  await ensureColumn(db, 'personal_agent_interactions', 'summary_queue_id', 'BIGINT UNSIGNED NULL AFTER conversation_log_id');
+  await ensureColumn(db, 'personal_agent_interactions', 'auto_saved_to_conversation_log', 'TINYINT(1) DEFAULT 0 AFTER summary_queue_id');
+  await ensureColumn(db, 'personal_agent_interactions', 'auto_queued_for_summary', 'TINYINT(1) DEFAULT 0 AFTER auto_saved_to_conversation_log');
+  await ensureColumn(db, 'personal_agent_interactions', 'save_status', 'VARCHAR(80) NULL AFTER auto_queued_for_summary');
+  await ensureColumn(db, 'personal_agent_interactions', 'save_error', 'TEXT NULL AFTER save_status');
+  await ensureColumn(db, 'personal_agent_interactions', 'answer_summary', 'TEXT NULL AFTER answer');
 
   await db.query(`
     CREATE TABLE IF NOT EXISTS personal_agent_project_rules (
@@ -403,8 +540,8 @@ async function getStatus(db) {
   return {
     ok: true,
     agent_status: providerRouter ? 'READY' : 'READY_WITH_MOCK_ONLY',
-    phase: '17-4',
-    feature: 'provider_router_real_ai_response_connection',
+    phase: '17-5',
+    feature: 'automatic_question_answer_storage_hardening',
     active_project_rules: Number(rules[0]?.cnt || 0),
     provider_router_available: Boolean(providerRouter),
     model_provider_available: Boolean(modelProvider?.testProviderAdapter),
@@ -413,7 +550,12 @@ async function getStatus(db) {
       ai_live_mode: isTruthy(process.env.AI_LIVE_MODE)
     },
     router_status: routerStatus,
-    phase17_5_entry_allowed: true,
+    storage_counts: {
+      personal_agent_interactions: await countRows(db, 'personal_agent_interactions'),
+      ai_conversation_logs: await countRows(db, 'ai_conversation_logs'),
+      ai_summary_queue: await countRows(db, 'ai_summary_queue')
+    },
+    phase17_6_entry_allowed: true,
     checked_at: nowIso()
   };
 }
@@ -427,12 +569,17 @@ async function ask(db, payload = {}) {
   const detected = await detectProject(db, question, payload.project_code || 'auto');
   const context = await searchMemoryContext(db, detected.detected_project_code, question, payload.context_limit || 5);
   const providerResult = await executeProviderAnswer({ question, detected, context, payload: { ...payload, provider: requestedProvider } });
+  const agentSessionId = buildAgentSessionId(detected.detected_project_code, payload);
+  const agentTurnNo = await getNextAgentTurnNo(db, agentSessionId);
+  const answerSummary = summarizeAnswer(providerResult.answer);
 
   const [result] = await db.query(
     `INSERT INTO personal_agent_interactions
-      (user_question, detected_project_code, provider_requested, provider_used, provider_model, provider_route_payload, provider_response_payload, provider_live_requested, provider_fallback_used, context_summary, context_payload, answer, used_memory_count, used_context_sources, detection_confidence, detection_reason, matched_keywords)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (agent_session_id, agent_turn_no, user_question, detected_project_code, provider_requested, provider_used, provider_model, provider_route_payload, provider_response_payload, provider_live_requested, provider_fallback_used, context_summary, context_payload, answer, answer_summary, used_memory_count, used_context_sources, detection_confidence, detection_reason, matched_keywords, save_status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
+      agentSessionId,
+      agentTurnNo,
       question,
       detected.detected_project_code,
       requestedProvider,
@@ -445,18 +592,68 @@ async function ask(db, payload = {}) {
       context.context_summary,
       safeJson(context),
       providerResult.answer,
+      answerSummary,
       context.used_memory_count,
       safeJson(context.sources),
       detected.confidence,
       detected.detection_reason,
-      JSON.stringify(detected.matched_keywords || [])
+      JSON.stringify(detected.matched_keywords || []),
+      'interaction_saved'
+    ]
+  );
+
+  const interactionId = Number(result.insertId);
+  const logSave = await saveAgentConversationLog(db, {
+    ...payload,
+    project_code: detected.detected_project_code,
+    session_id: agentSessionId,
+    question,
+    answer: providerResult.answer,
+    context_summary: context.context_summary,
+    provider_used: providerResult.provider_used,
+    provider_model: providerResult.provider_model,
+    conversation_title: `Personal Agent - ${detected.detected_project_code}`
+  });
+
+  let queueSave = { ok: false, skipped: true, reason: 'enqueue_summary not requested' };
+  if (logSave.ok && isTruthy(payload.enqueue_summary)) {
+    queueSave = await queueAgentConversationForSummary(db, logSave.conversation_log_id, detected.detected_project_code, {
+      ...payload,
+      provider_used: providerResult.provider_used
+    });
+  }
+
+  const finalSaveStatus = logSave.ok
+    ? (queueSave.ok ? 'interaction_conversation_log_summary_queued' : 'interaction_conversation_log_saved')
+    : 'interaction_saved_only';
+  const saveError = logSave.ok ? (queueSave.ok || queueSave.skipped ? null : queueSave.error) : logSave.error;
+
+  await db.query(
+    `UPDATE personal_agent_interactions
+     SET conversation_log_id = ?,
+         summary_queue_id = ?,
+         auto_saved_to_conversation_log = ?,
+         auto_queued_for_summary = ?,
+         save_status = ?,
+         save_error = ?
+     WHERE id = ?`,
+    [
+      logSave.conversation_log_id || null,
+      queueSave.summary_queue_id || null,
+      logSave.ok ? 1 : 0,
+      queueSave.ok ? 1 : 0,
+      finalSaveStatus,
+      saveError || null,
+      interactionId
     ]
   );
 
   return {
     ok: true,
-    phase: '17-4',
-    interaction_id: result.insertId,
+    phase: '17-5',
+    interaction_id: interactionId,
+    agent_session_id: agentSessionId,
+    agent_turn_no: agentTurnNo,
     detected_project_code: detected.detected_project_code,
     detection: detected,
     provider_requested: requestedProvider,
@@ -469,7 +666,13 @@ async function ask(db, payload = {}) {
     context_preview: context.context_summary,
     context_sources: context.sources,
     answer: providerResult.answer,
-    saved: true
+    answer_summary: answerSummary,
+    saved: true,
+    storage: {
+      save_status: finalSaveStatus,
+      conversation_log: logSave,
+      summary_queue: queueSave
+    }
   };
 }
 
@@ -483,7 +686,7 @@ async function test(db, payload = {}) {
     allow_fallback: payload.allow_fallback !== false,
     intent: payload.intent || 'coding'
   });
-  return { ok: true, test_status: 'PASS', phase17_5_entry_allowed: true, response };
+  return { ok: true, test_status: 'PASS', phase17_6_entry_allowed: true, response };
 }
 
 module.exports = {
@@ -493,6 +696,8 @@ module.exports = {
   detectProject,
   searchMemoryContext,
   executeProviderAnswer,
+  saveAgentConversationLog,
+  queueAgentConversationForSummary,
   ask,
   test
 };
