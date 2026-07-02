@@ -45,6 +45,7 @@
           <a href="#gemini-claude-importer" class="nav-item">Gemini / Claude Importer</a>
           <a href="#import-quality-review" class="nav-item">Import Quality Review</a>
           <a href="#phase15-final" class="nav-item">Phase 15 Final</a>
+          <a href="#personal-ai-agent" class="nav-item">Personal AI Agent</a>
         </div>
 
         <div class="nav-group" data-menu-group="security-operation">
@@ -5643,6 +5644,107 @@
           </div>
         </section>
 
+
+
+        <section id="personal-ai-agent" class="page-section">
+          <h3>Personal AI Agent</h3>
+          <p class="section-description">
+            Phase 17-2 auto project detection question window. This screen sends a question to the Personal AI Gateway Agent,
+            checks project/provider selection, loads a small memory context preview, returns a safe mock answer,
+            and stores the interaction in <code>personal_agent_interactions</code>.
+          </p>
+
+          <div class="grid two-columns">
+            <div class="card">
+              <h4>Ask Agent</h4>
+              <div class="form-grid">
+                <label>
+                  Project
+                  <select id="agentProjectCode">
+                    <option value="auto">Auto Detect</option>
+                    <option value="ai_memory_gateway">AI Memory Gateway</option>
+                    <option value="rbs_homes">RBS Homes</option>
+                    <option value="runquest_ph">RunQuest PH</option>
+                    <option value="philippines_franchise">Philippines Franchise</option>
+                    <option value="bgc_office_acquisition">BGC Office Acquisition</option>
+                    <option value="rbs_ai_memory">RBS AI Memory / Import Test</option>
+                  </select>
+                </label>
+                <label>
+                  Provider
+                  <select id="agentProvider">
+                    <option value="mock">Mock</option>
+                    <option value="auto">Auto</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="anthropic">Claude</option>
+                    <option value="gemini">Gemini</option>
+                  </select>
+                </label>
+                <label>
+                  Context Limit
+                  <input id="agentContextLimit" type="number" value="5" min="1" max="20" />
+                </label>
+              </div>
+              <label class="full-width-label">
+                Question
+                <textarea id="agentQuestion" rows="7" placeholder="AI Memory Gateway 프로젝트 이어서 진행하겠습니다. 다음 단계 알려주세요."></textarea>
+              </label>
+              <div class="button-row">
+                <button id="loadAgentStatusBtn" class="secondary-btn">Load Agent Status</button>
+                <button id="loadAgentProjectsBtn" class="secondary-btn">Load Projects</button>
+                <button id="runAgentTestBtn" class="secondary-btn">Run Agent Test</button>
+                <button id="detectAgentProjectBtn" class="secondary-btn">Detect Project</button>
+                <button id="testAgentProjectDetectionBtn" class="secondary-btn">Test Detection Rules</button>
+                <button id="askAgentBtn" class="primary-btn">Ask Agent</button>
+              </div>
+              <p id="agentInfo" class="muted">Ready.</p>
+            </div>
+
+            <div class="card metric-card">
+              <h4>Agent Status</h4>
+              <div class="metric-row"><span>Status</span><strong id="agentStatus">-</strong></div>
+              <div class="metric-row"><span>Detected Project</span><strong id="agentDetectedProject">-</strong></div>
+              <div class="metric-row"><span>Detection Confidence</span><strong id="agentDetectionConfidence">-</strong></div>
+              <div class="metric-row"><span>Provider Used</span><strong id="agentProviderUsed">-</strong></div>
+              <div class="metric-row"><span>Used Memory</span><strong id="agentUsedMemory">-</strong></div>
+              <div class="metric-row"><span>Interaction ID</span><strong id="agentInteractionId">-</strong></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h4>Project Detection Details</h4>
+            <pre id="agentDetectionOutput" class="json-output">No detection result yet.</pre>
+          </div>
+
+          <div class="card">
+            <h4>Agent Answer</h4>
+            <pre id="agentAnswerOutput" class="json-output">No answer yet.</pre>
+          </div>
+
+          <div class="card">
+            <h4>Context Preview</h4>
+            <table>
+              <thead>
+                <tr>
+                  <th>Source</th>
+                  <th>Project</th>
+                  <th>Title</th>
+                  <th>Excerpt</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="agentContextPreviewBody">
+                <tr><td colspan="5">No context loaded.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="card">
+            <h4>Raw Agent Result JSON</h4>
+            <pre id="agentRawOutput" class="json-output">{}</pre>
+          </div>
+        </section>
+
 </main>
   </div>
 
@@ -6336,6 +6438,112 @@
       });
     })();
   </script>
+
+
+  <script>
+    (function () {
+      function token171() {
+        return new URLSearchParams(window.location.search).get("token") || localStorage.getItem("adminToken") || "";
+      }
+      async function api171(path, options = {}) {
+        const res = await fetch(path, {
+          ...options,
+          headers: {
+            "Content-Type": "application/json",
+            "x-admin-token": token171(),
+            ...(options.headers || {})
+          }
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const err = new Error(data.error?.message || data.error || `HTTP ${res.status}`);
+          err.data = data;
+          throw err;
+        }
+        return data;
+      }
+      function esc171(value) {
+        return String(value == null ? "" : value).replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c] || c));
+      }
+      function set171(id, value) {
+        const el = document.getElementById(id);
+        if (el) el.textContent = value == null ? "-" : String(value);
+      }
+      function json171(id, value) {
+        const el = document.getElementById(id);
+        if (el) el.textContent = JSON.stringify(value || {}, null, 2);
+      }
+      function payload171() {
+        return {
+          project_code: document.getElementById("agentProjectCode")?.value || "auto",
+          provider: document.getElementById("agentProvider")?.value || "mock",
+          context_limit: Number(document.getElementById("agentContextLimit")?.value || 5),
+          question: document.getElementById("agentQuestion")?.value || "AI Memory Gateway 프로젝트 이어서 진행하겠습니다. 다음 단계 알려주세요."
+        };
+      }
+      function renderContext171(items) {
+        const body = document.getElementById("agentContextPreviewBody");
+        if (!body) return;
+        const rows = items || [];
+        body.innerHTML = rows.length ? rows.map((item) => `
+          <tr>
+            <td>${esc171(item.source || "-")}</td>
+            <td>${esc171(item.project_code || "-")}</td>
+            <td class="wrap-cell">${esc171(item.title || "-")}</td>
+            <td class="wrap-cell">${esc171(item.excerpt || "-")}</td>
+            <td>${esc171(item.status || item.memory_type || "-")}</td>
+          </tr>
+        `).join("") : '<tr><td colspan="5">No context loaded.</td></tr>';
+      }
+      function render171(data) {
+        const result = data.result || data;
+        set171("agentStatus", result.agent_status || data.test_status || (result.ok ? "READY" : "-"));
+        set171("agentDetectedProject", result.detected_project_code || "-");
+        set171("agentProviderUsed", result.provider_used || "-");
+        const confidence = result.detection_confidence ?? result.confidence ?? result.detection?.confidence;
+        set171("agentDetectionConfidence", confidence == null ? "-" : `${Math.round(Number(confidence) * 100)}%`);
+        set171("agentUsedMemory", result.used_memory_count ?? "-");
+        set171("agentInteractionId", result.interaction_id || "-");
+        set171("agentInfo", `Phase 17-2 loaded at ${new Date().toLocaleString()}`);
+        set171("agentAnswerOutput", result.answer || "No answer yet.");
+        json171("agentDetectionOutput", result.detection || {
+          detected_project_code: result.detected_project_code,
+          confidence: result.confidence || result.detection_confidence,
+          detection_reason: result.detection_reason,
+          matched_keywords: result.matched_keywords,
+          candidates: result.detection_candidates || result.candidates
+        });
+        renderContext171(result.context_preview || []);
+        json171("agentRawOutput", data);
+      }
+      function renderProjects171(data) {
+        const projectSelect = document.getElementById("agentProjectCode");
+        const providerSelect = document.getElementById("agentProvider");
+        if (projectSelect && Array.isArray(data.projects)) {
+          projectSelect.innerHTML = data.projects.map((item) => `<option value="${esc171(item.project_code)}">${esc171(item.label || item.project_code)}</option>`).join("");
+        }
+        if (providerSelect && Array.isArray(data.providers)) {
+          providerSelect.innerHTML = data.providers.map((item) => `<option value="${esc171(item.provider)}">${esc171(item.label || item.provider)}</option>`).join("");
+        }
+        render171(data);
+      }
+      async function loadStatus171() { render171(await api171("/ai/agent/status")); }
+      async function loadProjects171() { renderProjects171(await api171("/ai/agent/projects")); }
+      async function runTest171() { render171(await api171("/ai/agent/test", { method: "POST", body: JSON.stringify(payload171()) })); }
+      async function detectProject171() { render171(await api171("/ai/agent/detect-project", { method: "POST", body: JSON.stringify(payload171()) })); }
+      async function testDetection171() { render171(await api171("/ai/agent/project-detection/test", { method: "POST", body: JSON.stringify({}) })); }
+      async function ask171() { render171(await api171("/ai/agent/ask", { method: "POST", body: JSON.stringify(payload171()) })); }
+      window.addEventListener("DOMContentLoaded", () => {
+        document.getElementById("loadAgentStatusBtn")?.addEventListener("click", () => loadStatus171().catch((err) => { set171("agentInfo", err.message); json171("agentRawOutput", err.data || err.message); }));
+        document.getElementById("loadAgentProjectsBtn")?.addEventListener("click", () => loadProjects171().catch((err) => { set171("agentInfo", err.message); json171("agentRawOutput", err.data || err.message); }));
+        document.getElementById("runAgentTestBtn")?.addEventListener("click", () => runTest171().catch((err) => { set171("agentInfo", err.message); json171("agentRawOutput", err.data || err.message); }));
+        document.getElementById("detectAgentProjectBtn")?.addEventListener("click", () => detectProject171().catch((err) => { set171("agentInfo", err.message); json171("agentRawOutput", err.data || err.message); }));
+        document.getElementById("testAgentProjectDetectionBtn")?.addEventListener("click", () => testDetection171().catch((err) => { set171("agentInfo", err.message); json171("agentRawOutput", err.data || err.message); }));
+        document.getElementById("askAgentBtn")?.addEventListener("click", () => ask171().catch((err) => { set171("agentInfo", err.message); json171("agentRawOutput", err.data || err.message); }));
+      });
+    })();
+  </script>
+
 
 </body>
 </html>

@@ -3878,3 +3878,65 @@ router.post("/imports/final/test", adminApiAuthMiddleware, async (req, res) => {
     return res.status(500).json({ ok: false, error: error.message, source: "phase15-final-checklist.routes" });
   }
 });
+
+
+// ======================================================
+// Phase 17-1: Personal AI Gateway Agent Basic Question UI
+// ======================================================
+const phase17PersonalAgentService = require("../services/phase17-personal-agent.service");
+
+router.get("/agent/status", adminApiAuthMiddleware, async (req, res) => {
+  try {
+    return res.json(await phase17PersonalAgentService.getAgentStatus());
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error.message, source: "phase17-personal-agent.routes" });
+  }
+});
+
+router.get("/agent/projects", adminApiAuthMiddleware, async (req, res) => {
+  try {
+    return res.json(await phase17PersonalAgentService.getAgentProjects());
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error.message, source: "phase17-personal-agent.routes" });
+  }
+});
+
+router.get("/agent/project-detection/status", adminApiAuthMiddleware, async (req, res) => {
+  try {
+    return res.json(await phase17PersonalAgentService.getProjectDetectionStatus());
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error.message, source: "phase17-project-detection.routes" });
+  }
+});
+
+router.post("/agent/detect-project", adminApiAuthMiddleware, async (req, res) => {
+  try {
+    return res.json(await phase17PersonalAgentService.detectProject(req.body || {}));
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error.message, source: "phase17-project-detection.routes" });
+  }
+});
+
+router.post("/agent/project-detection/test", adminApiAuthMiddleware, async (req, res) => {
+  try {
+    return res.json(await phase17PersonalAgentService.runProjectDetectionTest(req.body || {}));
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error.message, source: "phase17-project-detection.routes" });
+  }
+});
+
+router.post("/agent/ask", adminApiAuthMiddleware, async (req, res) => {
+  try {
+    return res.json(await phase17PersonalAgentService.askPersonalAgent(req.body || {}));
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error.message, source: "phase17-personal-agent.routes" });
+  }
+});
+
+router.post("/agent/test", adminApiAuthMiddleware, async (req, res) => {
+  try {
+    return res.json(await phase17PersonalAgentService.runAgentTest(req.body || {}));
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error.message, source: "phase17-personal-agent.routes" });
+  }
+});
