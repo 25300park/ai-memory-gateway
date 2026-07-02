@@ -1,71 +1,49 @@
-<!-- Phase 17-6 UI merge notes
-Add this section to the existing Personal AI Agent panel in src/public/admin/index.html.
-Do not replace the whole file unless your current file is identical to the prior generated phase file.
--->
-<section id="personal-agent-continue-project" class="admin-card">
-  <h2>Personal AI Agent - Continue Project</h2>
-  <p>Phase 17-6: load recent project memory and continue the project from stored context.</p>
-  <label>Project Code</label>
-  <select id="continueProjectCode">
-    <option value="auto">Auto Detect</option>
-    <option value="ai_memory_gateway">ai_memory_gateway</option>
-    <option value="rbs_homes">rbs_homes</option>
-    <option value="runquest_ph">runquest_ph</option>
-    <option value="philippines_franchise">philippines_franchise</option>
-    <option value="bgc_office_acquisition">bgc_office_acquisition</option>
-  </select>
-  <label>Provider</label>
-  <select id="continueProvider">
-    <option value="mock">Mock</option>
-    <option value="auto">Auto Router</option>
-    <option value="openai">OpenAI</option>
-    <option value="anthropic">Claude</option>
-    <option value="google">Gemini</option>
-  </select>
-  <label>Question / continuation request</label>
-  <textarea id="continueQuestion" rows="5" placeholder="AI Memory Gateway 프로젝트 이어서 진행하겠습니다. 현재 상태와 다음 단계 알려주세요."></textarea>
-  <label>Context Limit</label>
-  <input id="continueContextLimit" type="number" value="8" min="1" max="20" />
-  <label>Recent Limit</label>
-  <input id="continueRecentLimit" type="number" value="5" min="1" max="20" />
-  <button onclick="runContinueProject && runContinueProject()">Continue Project</button>
-  <button onclick="runContinueProjectTest && runContinueProjectTest()">Run Continue Test</button>
-  <pre id="continueProjectOutput"></pre>
+<!-- Phase 17-7 Personal Agent Operation Logs / Usage History UI block.
+If your current Admin index.html is already customized, merge this block into the Personal AI Agent section instead of replacing the whole file. -->
+
+<section id="personal-agent-operation-logs" class="admin-section">
+  <h2>Personal AI Agent - Operation Logs / Usage History</h2>
+  <p>Phase 17-7 adds usage history and operation log review for the Personal AI Gateway Agent.</p>
+
+  <div class="button-row">
+    <button onclick="loadAgentOperationLogStatus && loadAgentOperationLogStatus()">Load Operation Log Status</button>
+    <button onclick="loadAgentUsageHistory && loadAgentUsageHistory()">Load Usage History</button>
+    <button onclick="runAgentOperationLogTest && runAgentOperationLogTest()">Run Operation Log Test</button>
+  </div>
+
+  <pre id="agent-operation-logs-output">Use Postman if this lightweight UI block is not wired to your current dashboard.js.</pre>
 </section>
+
 <script>
-async function runContinueProject(){
-  const token = new URLSearchParams(location.search).get('token') || localStorage.getItem('adminToken') || '';
-  const body = {
-    project_code: document.getElementById('continueProjectCode').value,
-    provider: document.getElementById('continueProvider').value,
-    question: document.getElementById('continueQuestion').value,
-    context_limit: Number(document.getElementById('continueContextLimit').value || 8),
-    recent_limit: Number(document.getElementById('continueRecentLimit').value || 5),
-    enqueue_summary: false,
-    live: false,
-    allow_fallback: true
-  };
-  const res = await fetch('/ai/agent/continue-project', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json','x-admin-token':token},
-    body: JSON.stringify(body)
+async function phase17FetchJson(url, options = {}) {
+  const token = new URLSearchParams(window.location.search).get('token') || localStorage.getItem('adminToken') || '';
+  const res = await fetch(url, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      'x-admin-token': token,
+      ...(options.headers || {})
+    }
   });
-  document.getElementById('continueProjectOutput').textContent = JSON.stringify(await res.json(), null, 2);
+  return res.json();
 }
-async function runContinueProjectTest(){
-  const token = new URLSearchParams(location.search).get('token') || localStorage.getItem('adminToken') || '';
-  const body = {
-    project_code: document.getElementById('continueProjectCode').value,
-    provider: 'mock',
-    question: document.getElementById('continueQuestion').value || 'AI Memory Gateway 프로젝트 이어서 진행하겠습니다. 현재 상태와 다음 단계 알려주세요.',
-    context_limit: Number(document.getElementById('continueContextLimit').value || 5),
-    recent_limit: Number(document.getElementById('continueRecentLimit').value || 3)
-  };
-  const res = await fetch('/ai/agent/continue-project/test', {
+function phase17WriteOutput(data) {
+  const el = document.getElementById('agent-operation-logs-output');
+  if (el) el.textContent = JSON.stringify(data, null, 2);
+}
+window.loadAgentOperationLogStatus = async function () {
+  phase17WriteOutput(await phase17FetchJson('/ai/agent/operation-logs/status'));
+};
+window.loadAgentUsageHistory = async function () {
+  phase17WriteOutput(await phase17FetchJson('/ai/agent/usage-history', {
     method: 'POST',
-    headers: {'Content-Type':'application/json','x-admin-token':token},
-    body: JSON.stringify(body)
-  });
-  document.getElementById('continueProjectOutput').textContent = JSON.stringify(await res.json(), null, 2);
-}
+    body: JSON.stringify({ project_code: 'all', provider: 'all', limit: 20 })
+  }));
+};
+window.runAgentOperationLogTest = async function () {
+  phase17WriteOutput(await phase17FetchJson('/ai/agent/operation-logs/test', {
+    method: 'POST',
+    body: JSON.stringify({ project_code: 'ai_memory_gateway', provider: 'mock', limit: 5 })
+  }));
+};
 </script>

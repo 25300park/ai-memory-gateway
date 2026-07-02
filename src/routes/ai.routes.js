@@ -1,6 +1,6 @@
-// Phase 17-6 route additions placeholder.
+// Phase 17-7 route additions placeholder.
 // IMPORTANT: If your current ai.routes.js has many existing routes, do not replace it blindly.
-// Merge the following route block into the existing router file after requiring the service.
+// Merge the following /agent route block into the existing router file after requiring the service.
 
 const express = require('express');
 const router = express.Router();
@@ -38,17 +38,43 @@ router.post('/agent/continue-project/test', asyncHandler(async (req, res) => {
   res.json(await personalAgent.continueProjectTest(db, req.body || {}));
 }));
 
+router.get('/agent/operation-logs/status', asyncHandler(async (req, res) => {
+  res.json(await personalAgent.getOperationLogsStatus(db));
+}));
+
+router.post('/agent/usage-history', asyncHandler(async (req, res) => {
+  res.json(await personalAgent.getUsageHistory(db, req.body || {}));
+}));
+
+router.post('/agent/operation-logs', asyncHandler(async (req, res) => {
+  res.json(await personalAgent.getOperationLogs(db, req.body || {}));
+}));
+
+router.post('/agent/operation-logs/test', asyncHandler(async (req, res) => {
+  res.json(await personalAgent.operationLogsTest(db, req.body || {}));
+}));
+
 router.post('/agent/ask', asyncHandler(async (req, res) => {
-  res.json(await personalAgent.ask(db, req.body));
+  const result = await personalAgent.ask(db, req.body || {});
+  await personalAgent.recordOperationLog(db, {
+    operation_type: 'agent_ask',
+    project_code: result.detected_project_code,
+    provider_used: result.provider_used,
+    interaction_id: result.interaction_id,
+    status: result.ok ? 'ok' : 'failed',
+    message: 'Personal AI Agent ask executed.',
+    payload: { phase: result.phase, used_memory_count: result.used_memory_count, save_status: result.storage?.save_status }
+  });
+  res.json(result);
 }));
 
 router.post('/agent/test', asyncHandler(async (req, res) => {
-  res.json(await personalAgent.test(db, req.body));
+  res.json(await personalAgent.test(db, req.body || {}));
 }));
 
 router.post('/agent/context-search/test', asyncHandler(async (req, res) => {
   const result = await personalAgent.test(db, req.body || {});
-  res.json({ ok: true, test_status: 'PASS', phase17_4_entry_allowed: true, result });
+  res.json({ ok: true, test_status: 'PASS', phase17_final_entry_allowed: true, result });
 }));
 
 module.exports = router;

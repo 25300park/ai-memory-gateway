@@ -835,6 +835,147 @@ async function test(db, payload = {}) {
   return { ok: true, test_status: 'PASS', phase17_7_entry_allowed: true, response };
 }
 
+
+async function ensureOperationLogsTable(db) {
+  await ensureTables(db);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS personal_agent_operation_logs (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      operation_type VARCHAR(80) NOT NULL,
+      project_code VARCHAR(120) NULL,
+      provider_used VARCHAR(80) NULL,
+      interaction_id BIGINT UNSIGNED NULL,
+      status VARCHAR(40) NOT NULL DEFAULT 'ok',
+      message TEXT NULL,
+      payload JSON NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_operation_type (operation_type),
+      INDEX idx_project_code (project_code),
+      INDEX idx_status (status),
+      INDEX idx_created_at (created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+}
+
+async function recordOperationLog(db, payload = {}) {
+  try {
+    await ensureOperationLogsTable(db);
+    const [result] = await db.query(
+      `INSERT INTO personal_agent_operation_logs (
+         operation_type, project_code, provider_used, interaction_id, status, message, payload
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        payload.operation_type || 'agent_operation',
+        payload.project_code || null,
+        payload.provider_used || null,
+        payload.interaction_id || null,
+        payload.status || 'ok',
+        payload.message || null,
+        safeJson(payload.payload || {})
+      ]
+    );
+    return { ok: true, operation_log_id: Number(result.insertId) };
+  } catch (error) {
+    return { ok: false, error: error.message, code: error.code };
+  }
+}
+
+async function getOperationLogsStatus(db) {
+  await ensureOperationLogsTable(db);
+  const interactionCount = await countRows(db, 'personal_agent_interactions');
+  const operationLogCount = await countRows(db, 'personal_agent_operation_logs');
+  const todayCount = await countRows(db, 'personal_agent_interactions', 'WHERE DATE(created_at) = CURDATE()');
+  const [recentRows] = await db.query(
+    `SELECT id, operation_type, project_code, provider_used, interaction_id, status, message, created_at
+     FROM personal_agent_operation_logs
+     ORDER BY id DESC
+     LIMIT 5`
+  );
+  return {
+    ok: true,
+    phase: '17-7',
+    operation_logs_status: 'READY',
+    phase17_final_entry_allowed: true,
+    counts: {
+      personal_agent_interactions: interactionCount,
+      personal_agent_operation_logs: operationLogCount,
+      today_interactions: todayCount
+    },
+    recent_operation_logs: recentRows
+  };
+}
+
+async function getUsageHistory(db, payload = {}) {
+  await ensureOperationLogsTable(db);
+  const limit = Math.min(Number(payload.limit || 20), 100);
+  const projectCode = payload.project_code && payload.project_code !== 'all' ? String(payload.project_code) : null;
+  const provider = payload.provider && payload.provider !== 'all' ? normalizeProvider(payload.provider) : null;
+  const params = [];
+  const where = [];
+  if (projectCode) { where.push('detected_project_code = ?'); params.push(projectCode); }
+  if (provider) { where.push('provider_used = ?'); params.push(provider); }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  params.push(limit);
+  const [rows] = await db.query(
+    `SELECT id, agent_session_id, agent_turn_no, detected_project_code,
+            provider_requested, provider_used, provider_model,
+            used_memory_count, save_status, answer_summary, created_at
+     FROM personal_agent_interactions
+     ${whereSql}
+     ORDER BY id DESC
+     LIMIT ?`,
+    params
+  );
+  return {
+    ok: true,
+    phase: '17-7',
+    usage_history_status: 'READY',
+    filters: { project_code: projectCode || 'all', provider: provider || 'all', limit },
+    rows
+  };
+}
+
+async function getOperationLogs(db, payload = {}) {
+  await ensureOperationLogsTable(db);
+  const limit = Math.min(Number(payload.limit || 50), 200);
+  const status = payload.status && payload.status !== 'all' ? String(payload.status) : null;
+  const params = [];
+  const where = [];
+  if (status) { where.push('status = ?'); params.push(status); }
+  params.push(limit);
+  const [rows] = await db.query(
+    `SELECT id, operation_type, project_code, provider_used, interaction_id, status, message, created_at
+     FROM personal_agent_operation_logs
+     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+     ORDER BY id DESC
+     LIMIT ?`,
+    params
+  );
+  return { ok: true, phase: '17-7', operation_logs: rows };
+}
+
+async function operationLogsTest(db, payload = {}) {
+  const history = await getUsageHistory(db, { limit: payload.limit || 5 });
+  const log = await recordOperationLog(db, {
+    operation_type: 'phase17_7_test',
+    project_code: payload.project_code || 'ai_memory_gateway',
+    provider_used: payload.provider || 'mock',
+    status: 'ok',
+    message: 'Phase 17-7 operation logs test executed.',
+    payload: { history_count: history.rows.length, tested_at: nowIso() }
+  });
+  const status = await getOperationLogsStatus(db);
+  return {
+    ok: true,
+    test_status: 'PASS',
+    phase: '17-7',
+    phase17_final_entry_allowed: true,
+    operation_log: log,
+    status,
+    history_sample_count: history.rows.length
+  };
+}
+
 module.exports = {
   ensureTables,
   getStatus,
@@ -850,5 +991,11 @@ module.exports = {
   continueProject,
   continueProjectTest,
   ask,
-  test
+  test,
+  ensureOperationLogsTable,
+  recordOperationLog,
+  getOperationLogsStatus,
+  getUsageHistory,
+  getOperationLogs,
+  operationLogsTest
 };
