@@ -6,6 +6,8 @@ const express = require('express');
 const router = express.Router();
 const personalAgent = require('../services/phase17-personal-agent.service');
 const db = require('../config/db');
+const geminiClaudeImporterService = require('../services/gemini-claude-importer.service');
+const adminApiAuthMiddleware = require('../middlewares/admin-api-auth.middleware');
 
 function asyncHandler(fn) {
   return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -75,6 +77,37 @@ router.post('/agent/test', asyncHandler(async (req, res) => {
 router.post('/agent/context-search/test', asyncHandler(async (req, res) => {
   const result = await personalAgent.test(db, req.body || {});
   res.json({ ok: true, test_status: 'PASS', phase17_final_entry_allowed: true, result });
+}));
+
+
+// ======================================================
+// Phase 15-5A: Gemini / Claude Importer Route Recovery
+// Purpose: Restore Claude/Gemini importer API routes after Phase 17 route merges.
+// ======================================================
+router.get('/imports/gemini-claude/status', adminApiAuthMiddleware, asyncHandler(async (req, res) => {
+  res.json(await geminiClaudeImporterService.getGeminiClaudeImporterStatus());
+}));
+
+router.get('/imports/gemini-claude/checklist', adminApiAuthMiddleware, asyncHandler(async (req, res) => {
+  const status = await geminiClaudeImporterService.getGeminiClaudeImporterStatus();
+  res.json({
+    ok: status.ok,
+    phase: '15-5A',
+    checked_at: new Date().toISOString(),
+    checklist_status: status.importer_status,
+    checklist: status.checklist,
+    dependency: status.dependency,
+    counts: status.counts,
+    supported_platforms: status.supported_platforms
+  });
+}));
+
+router.post('/imports/gemini-claude/test', adminApiAuthMiddleware, asyncHandler(async (req, res) => {
+  res.json(await geminiClaudeImporterService.runGeminiClaudeImporterTest(req.body || {}));
+}));
+
+router.post('/imports/gemini-claude/import', adminApiAuthMiddleware, asyncHandler(async (req, res) => {
+  res.json(await geminiClaudeImporterService.importGeminiClaudeExport(req.body || {}));
 }));
 
 module.exports = router;
