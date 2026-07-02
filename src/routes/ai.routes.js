@@ -1,13 +1,13 @@
-// Phase 17-7 route additions placeholder.
-// IMPORTANT: If your current ai.routes.js has many existing routes, do not replace it blindly.
-// Merge the following /agent route block into the existing router file after requiring the service.
+// Phase 17 route file with Phase 15 import route recovery.
+// Restores Gemini/Claude importer and Import Memory Search routes while preserving Personal AI Agent routes.
 
 const express = require('express');
 const router = express.Router();
 const personalAgent = require('../services/phase17-personal-agent.service');
 const db = require('../config/db');
-const geminiClaudeImporterService = require('../services/gemini-claude-importer.service');
 const adminApiAuthMiddleware = require('../middlewares/admin-api-auth.middleware');
+const geminiClaudeImporterService = require('../services/gemini-claude-importer.service');
+const importMemorySearchService = require('../services/phase15-import-memory-search.service');
 
 function asyncHandler(fn) {
   return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -79,6 +79,36 @@ router.post('/agent/context-search/test', asyncHandler(async (req, res) => {
   res.json({ ok: true, test_status: 'PASS', phase17_final_entry_allowed: true, result });
 }));
 
+// ======================================================
+// Phase 15-4A: Import Memory Search Route Recovery
+// Purpose: Restore imported memory search routes after Phase 17 route merges.
+// ======================================================
+router.get('/imports/memory-search/status', adminApiAuthMiddleware, asyncHandler(async (req, res) => {
+  res.json(await importMemorySearchService.getImportMemorySearchStatus());
+}));
+
+router.get('/imports/memory-search/checklist', adminApiAuthMiddleware, asyncHandler(async (req, res) => {
+  const status = await importMemorySearchService.getImportMemorySearchStatus();
+  res.json({
+    ok: status.ok,
+    phase: '15-4A',
+    checked_at: new Date().toISOString(),
+    checklist_status: status.search_status,
+    checklist: status.checklist,
+    tables: status.tables,
+    columns: status.columns,
+    counts: status.counts,
+    default_filters: status.default_filters
+  });
+}));
+
+router.post('/imports/memory-search/search', adminApiAuthMiddleware, asyncHandler(async (req, res) => {
+  res.json(await importMemorySearchService.searchImportedMemories(req.body || {}));
+}));
+
+router.post('/imports/memory-search/test', adminApiAuthMiddleware, asyncHandler(async (req, res) => {
+  res.json(await importMemorySearchService.runImportMemorySearchTest(req.body || {}));
+}));
 
 // ======================================================
 // Phase 15-5A: Gemini / Claude Importer Route Recovery
