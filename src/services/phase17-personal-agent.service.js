@@ -2,7 +2,7 @@
 
 /**
  * Phase 17 Personal Agent Service
- * Phase 17-5: Automatic Question / Answer Storage Hardening
+ * Phase 17-6: Continue Project Feature
  *
  * This version keeps the Phase 17-3 memory-context flow and adds a provider
  * execution layer. In safe mode it uses provider-router dry-run/mock output;
@@ -527,6 +527,151 @@ async function executeProviderAnswer({ question, detected, context, payload }) {
   }
 }
 
+
+async function getRecentProjectInteractions(db, projectCode, limit = 5) {
+  const safeLimit = Math.max(1, Math.min(Number(limit || 5), 20));
+  if (!(await tableExists(db, 'personal_agent_interactions'))) return [];
+  try {
+    const [rows] = await db.query(
+      `SELECT id, agent_session_id, agent_turn_no, user_question, answer_summary, answer,
+              detected_project_code, provider_used, provider_model, used_memory_count,
+              save_status, created_at
+       FROM personal_agent_interactions
+       WHERE detected_project_code = ?
+       ORDER BY id DESC
+       LIMIT ${safeLimit}`,
+      [projectCode]
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      session_id: r.agent_session_id,
+      turn_no: r.agent_turn_no,
+      question: r.user_question,
+      answer_summary: r.answer_summary || summarizeAnswer(r.answer || ''),
+      provider_used: r.provider_used,
+      provider_model: r.provider_model,
+      used_memory_count: r.used_memory_count,
+      save_status: r.save_status,
+      created_at: r.created_at
+    }));
+  } catch (_) {
+    return [];
+  }
+}
+
+async function getRecentConversationLogs(db, projectCode, limit = 5) {
+  const safeLimit = Math.max(1, Math.min(Number(limit || 5), 20));
+  if (!(await tableExists(db, 'ai_conversation_logs'))) return [];
+  try {
+    const [rows] = await db.query(
+      `SELECT id, project_code, session_id, source_ai, conversation_title, summary,
+              user_message, assistant_message, model_name, status, created_at
+       FROM ai_conversation_logs
+       WHERE project_code = ?
+       ORDER BY id DESC
+       LIMIT ${safeLimit}`,
+      [projectCode]
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      session_id: r.session_id,
+      source_ai: r.source_ai,
+      title: r.conversation_title,
+      summary: r.summary || summarizeAnswer(r.assistant_message || r.user_message || ''),
+      model_name: r.model_name,
+      status: r.status,
+      created_at: r.created_at
+    }));
+  } catch (_) {
+    return [];
+  }
+}
+
+function buildContinuePrompt({ projectCode, question, context, recentInteractions, recentLogs }) {
+  const interactionsText = recentInteractions.map((r, i) => (
+    `[${i + 1}] ${r.created_at || ''} / ${r.provider_used || ''}\nQ: ${String(r.question || '').slice(0, 300)}\nA: ${String(r.answer_summary || '').slice(0, 500)}`
+  )).join('\n\n');
+  const logsText = recentLogs.map((r, i) => (
+    `[${i + 1}] ${r.created_at || ''} / ${r.source_ai || ''} / ${r.title || ''}\n${String(r.summary || '').slice(0, 500)}`
+  )).join('\n\n');
+  return [
+    'You are continuing an existing project for the user.',
+    'Answer in Korean unless the user asks otherwise.',
+    'Use the stored memory and recent activity below as the continuity source of truth.',
+    '',
+    `Project code: ${projectCode}`,
+    '',
+    '## Current user request',
+    question || '이 프로젝트를 이어서 진행하겠습니다. 현재 상태와 다음 단계를 알려주세요.',
+    '',
+    '## Memory Context',
+    context?.context_summary || '(No memory context found.)',
+    '',
+    '## Recent Personal Agent Interactions',
+    interactionsText || '(No recent Personal Agent interactions found.)',
+    '',
+    '## Recent Conversation Logs',
+    logsText || '(No recent conversation logs found.)',
+    '',
+    '## Response Requirements',
+    '- Start with the current project status.',
+    '- Then list the next recommended step.',
+    '- Mention what information is missing, if any.',
+    '- Keep the response practical and directly actionable.'
+  ].join('\n');
+}
+
+async function continueProject(db, payload = {}) {
+  await ensureTables(db);
+  const rawQuestion = String(payload.question || '').trim();
+  const question = rawQuestion || '이 프로젝트를 이어서 진행하겠습니다. 현재 상태와 다음 단계를 알려주세요.';
+  const detected = await detectProject(db, question, payload.project_code || 'auto');
+  const projectCode = detected.detected_project_code;
+  const context = await searchMemoryContext(db, projectCode, question, payload.context_limit || 8);
+  const recentInteractions = await getRecentProjectInteractions(db, projectCode, payload.recent_limit || 5);
+  const recentLogs = await getRecentConversationLogs(db, projectCode, payload.recent_limit || 5);
+
+  const continuePrompt = buildContinuePrompt({ projectCode, question, context, recentInteractions, recentLogs });
+  const response = await ask(db, {
+    ...payload,
+    project_code: projectCode,
+    question: continuePrompt,
+    provider: payload.provider || 'mock',
+    context_limit: payload.context_limit || 8,
+    enqueue_summary: payload.enqueue_summary === true,
+    session_id: payload.session_id || buildAgentSessionId(projectCode, { session_id: `continue-${projectCode}-${new Date().toISOString().slice(0,10).replace(/-/g,'')}` })
+  });
+
+  return {
+    ok: true,
+    phase: '17-6',
+    continue_status: 'READY',
+    requested_project_code: payload.project_code || 'auto',
+    detected_project_code: projectCode,
+    detection: detected,
+    used_memory_count: context.used_memory_count,
+    recent_interaction_count: recentInteractions.length,
+    recent_log_count: recentLogs.length,
+    continue_prompt_preview: continuePrompt.slice(0, 4000),
+    response,
+    phase17_7_entry_allowed: true
+  };
+}
+
+async function continueProjectTest(db, payload = {}) {
+  const result = await continueProject(db, {
+    project_code: payload.project_code || 'auto',
+    provider: payload.provider || 'mock',
+    context_limit: payload.context_limit || 5,
+    recent_limit: payload.recent_limit || 3,
+    question: payload.question || 'AI Memory Gateway 프로젝트 이어서 진행하겠습니다. 현재 상태와 다음 단계 알려주세요.',
+    enqueue_summary: false,
+    live: false,
+    allow_fallback: true
+  });
+  return { ok: true, test_status: 'PASS', phase17_7_entry_allowed: true, result };
+}
+
 async function getStatus(db) {
   await ensureTables(db);
   const [rules] = await db.query('SELECT COUNT(*) AS cnt FROM personal_agent_project_rules WHERE is_active = 1');
@@ -540,8 +685,8 @@ async function getStatus(db) {
   return {
     ok: true,
     agent_status: providerRouter ? 'READY' : 'READY_WITH_MOCK_ONLY',
-    phase: '17-5',
-    feature: 'automatic_question_answer_storage_hardening',
+    phase: '17-6',
+    feature: 'continue_project_memory_bootstrap',
     active_project_rules: Number(rules[0]?.cnt || 0),
     provider_router_available: Boolean(providerRouter),
     model_provider_available: Boolean(modelProvider?.testProviderAdapter),
@@ -550,12 +695,13 @@ async function getStatus(db) {
       ai_live_mode: isTruthy(process.env.AI_LIVE_MODE)
     },
     router_status: routerStatus,
+    continue_project_available: true,
     storage_counts: {
       personal_agent_interactions: await countRows(db, 'personal_agent_interactions'),
       ai_conversation_logs: await countRows(db, 'ai_conversation_logs'),
       ai_summary_queue: await countRows(db, 'ai_summary_queue')
     },
-    phase17_6_entry_allowed: true,
+    phase17_7_entry_allowed: true,
     checked_at: nowIso()
   };
 }
@@ -650,7 +796,7 @@ async function ask(db, payload = {}) {
 
   return {
     ok: true,
-    phase: '17-5',
+    phase: '17-6',
     interaction_id: interactionId,
     agent_session_id: agentSessionId,
     agent_turn_no: agentTurnNo,
@@ -686,7 +832,7 @@ async function test(db, payload = {}) {
     allow_fallback: payload.allow_fallback !== false,
     intent: payload.intent || 'coding'
   });
-  return { ok: true, test_status: 'PASS', phase17_6_entry_allowed: true, response };
+  return { ok: true, test_status: 'PASS', phase17_7_entry_allowed: true, response };
 }
 
 module.exports = {
@@ -698,6 +844,11 @@ module.exports = {
   executeProviderAnswer,
   saveAgentConversationLog,
   queueAgentConversationForSummary,
+  getRecentProjectInteractions,
+  getRecentConversationLogs,
+  buildContinuePrompt,
+  continueProject,
+  continueProjectTest,
   ask,
   test
 };
