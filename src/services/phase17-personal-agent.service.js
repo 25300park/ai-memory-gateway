@@ -255,6 +255,12 @@ async function ensureTables(db) {
   await ensureColumn(db, 'personal_agent_interactions', 'save_status', 'VARCHAR(80) NULL AFTER auto_queued_for_summary');
   await ensureColumn(db, 'personal_agent_interactions', 'save_error', 'TEXT NULL AFTER save_status');
   await ensureColumn(db, 'personal_agent_interactions', 'answer_summary', 'TEXT NULL AFTER answer');
+  await ensureColumn(db, 'personal_agent_interactions', 'question_type', 'VARCHAR(80) NULL AFTER answer_summary');
+  await ensureColumn(db, 'personal_agent_interactions', 'gateway_selected_provider', 'VARCHAR(80) NULL AFTER question_type');
+  await ensureColumn(db, 'personal_agent_interactions', 'gateway_live_call_recommended', 'TINYINT(1) DEFAULT 0 AFTER gateway_selected_provider');
+  await ensureColumn(db, 'personal_agent_interactions', 'gateway_cost_level', 'VARCHAR(40) NULL AFTER gateway_live_call_recommended');
+  await ensureColumn(db, 'personal_agent_interactions', 'gateway_decision_reason', 'TEXT NULL AFTER gateway_cost_level');
+  await ensureColumn(db, 'personal_agent_interactions', 'gateway_decision_payload', 'LONGTEXT NULL AFTER gateway_decision_reason');
 
   await db.query(`
     CREATE TABLE IF NOT EXISTS personal_agent_project_rules (
@@ -382,17 +388,121 @@ function scoreMemoryRow(row, terms = []) {
   return score;
 }
 
+function detectPreferredSource(question = '') {
+  const q = String(question || '').toLowerCase();
+  if (/(claude|클로드|anthropic)/i.test(q)) return 'claude';
+  if (/(chatgpt|gpt|챗지피티|openai)/i.test(q)) return 'chatgpt';
+  if (/(gemini|제미니|google)/i.test(q)) return 'google';
+  return null;
+}
+
+function buildSourceFilterSql(preferredSource, columnName) {
+  if (!preferredSource) return { sql: '', params: [] };
+  if (preferredSource === 'claude') return { sql: `AND LOWER(${columnName}) IN ('claude', 'anthropic')`, params: [] };
+  if (preferredSource === 'chatgpt') return { sql: `AND LOWER(${columnName}) IN ('chatgpt', 'openai', 'gpt')`, params: [] };
+  if (preferredSource === 'google') return { sql: `AND LOWER(${columnName}) IN ('google', 'gemini')`, params: [] };
+  return { sql: '', params: [] };
+}
+
+function normalizeMemorySource(value = '') {
+  const v = String(value || '').toLowerCase().trim();
+  if (['claude', 'anthropic'].includes(v)) return 'claude';
+  if (['chatgpt', 'openai', 'gpt'].includes(v)) return 'chatgpt';
+  if (['gemini', 'google'].includes(v)) return 'google';
+  if (['mock', 'test', 'dry_run'].includes(v)) return 'mock';
+  return v || 'unknown';
+}
+
+function isLowValueTestMemory(row = {}) {
+  const text = [row.title, row.summary, row.detail, row.tags, row.source_ai, row.source_platform]
+    .map((v) => String(v || '').toLowerCase())
+    .join(' ');
+  return /mock provider|mock assistant|provider router automatic selection test|provider-interface dry run|ai response test|phase 10-5|phase 11-6/.test(text)
+    || normalizeMemorySource(row.source_ai || row.source_platform) === 'mock';
+}
+
+function memoryFingerprint(source = {}) {
+  const title = String(source.title || '').replace(/^Summary:\s*/i, '').toLowerCase().trim();
+  const sourceName = normalizeMemorySource(source.source_ai || source.source_platform || '');
+  const body = String(source.text || source.summary || source.detail || '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .slice(0, 220)
+    .trim();
+  // Prefer content-level de-duplication over id-level de-duplication because
+  // repeated mock/test memories can be stored as separate rows with identical text.
+  return `${sourceName}:${title}:${body}`;
+}
+
+function sourceMatchesPreference(source = {}, preferredSource = null) {
+  if (!preferredSource) return true;
+  const normalized = normalizeMemorySource(source.source_ai || source.source_platform || '');
+  return normalized === preferredSource;
+}
+
+function extractRequestAndResponse(text = '') {
+  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+  const requestMatch = normalized.match(/사용자 요청:\s*(.*?)(?:\s*응답 요지:|$)/);
+  const responseMatch = normalized.match(/응답 요지:\s*(.*)$/);
+  return {
+    request: requestMatch ? requestMatch[1].trim().slice(0, 220) : '',
+    response: responseMatch ? responseMatch[1].trim().slice(0, 360) : normalized.slice(0, 360)
+  };
+}
+
+function buildReadableContextSummary(sources = [], question = '') {
+  const preferredSource = detectPreferredSource(question);
+  let filtered = Array.isArray(sources) ? sources : [];
+  if (preferredSource) {
+    const matched = filtered.filter((s) => sourceMatchesPreference(s, preferredSource));
+    if (matched.length > 0) filtered = matched;
+  }
+
+  if (!filtered.length) {
+    return '아직 이 질문에 연결된 memory를 찾지 못했습니다. import와 summary worker 처리 상태를 먼저 확인해야 합니다.';
+  }
+
+  const bullets = filtered.slice(0, 6).map((s, idx) => {
+    const parsed = extractRequestAndResponse(`${s.text || ''} ${s.detail || ''}`);
+    const title = String(s.title || `memory#${s.id}`).replace(/^Summary:\s*/i, '').trim();
+    const source = s.source_ai || s.source_platform || s.source_type || 'memory';
+    const request = parsed.request ? ` 요청은 “${parsed.request}”였습니다.` : '';
+    const response = parsed.response ? ` 핵심 내용은 ${parsed.response}` : ` ${String(s.text || s.detail || '').slice(0, 300)}`;
+    return `${idx + 1}. ${title} (${source})\n   -${request}${response}`.trimEnd();
+  });
+
+  const nextStep = preferredSource === 'claude'
+    ? '현재 Claude import 데이터는 검색되고 있지만, imported 원본이 3건뿐이라 답변 품질은 아직 제한적입니다. ChatGPT/Gemini export까지 들어오면 프로젝트 흐름을 훨씬 자연스럽게 이어갈 수 있습니다.'
+    : '현재 검색된 memory를 기준으로 요약했습니다. 더 자연스러운 답변은 live provider 연결 후 가능합니다.';
+
+  return [
+    `검색된 memory ${filtered.length}건을 기준으로 간략히 정리하면 다음과 같습니다.`,
+    '',
+    ...bullets,
+    '',
+    `다음 판단: ${nextStep}`
+  ].join('\n');
+}
+
 async function searchMemoryContext(db, projectCode, question, limit = 5) {
   const safeLimit = Math.max(1, Math.min(Number(limit || 5), 20));
   const projectAliases = getProjectAliases(projectCode);
   const terms = buildSearchTerms(question);
+  const preferredSource = detectPreferredSource(question);
+  const aiMemorySourceFilter = buildSourceFilterSql(preferredSource, 'source_ai');
+  const rawImportSourceFilter = buildSourceFilterSql(preferredSource, 'source_platform');
   const sources = [];
-  const seen = new Set();
+  const seenIds = new Set();
+  const seenFingerprints = new Set();
 
   function addSource(source) {
-    const key = `${source.source_type}:${source.id}`;
-    if (seen.has(key)) return;
-    seen.add(key);
+    if (!source) return;
+    if (preferredSource && !sourceMatchesPreference(source, preferredSource)) return;
+    const idKey = `${source.source_type}:${source.id}`;
+    const fpKey = memoryFingerprint(source);
+    if (seenIds.has(idKey) || seenFingerprints.has(fpKey)) return;
+    seenIds.add(idKey);
+    seenFingerprints.add(fpKey);
     sources.push(source);
   }
 
@@ -416,14 +526,21 @@ async function searchMemoryContext(db, projectCode, question, limit = 5) {
          FROM ai_memory
          WHERE ${projectWhere}
            AND (status IS NULL OR status = 'active')
+           ${aiMemorySourceFilter.sql}
            ${keywordWhere}
          ORDER BY id DESC
-         LIMIT ${safeLimit}`,
+         LIMIT ${safeLimit * 4}`,
         params
       );
 
       const scoredRows = rows
-        .map((r) => ({ ...r, _score: scoreMemoryRow(r, terms) }))
+        .filter((r) => preferredSource || !isLowValueTestMemory(r))
+        .map((r) => ({
+          ...r,
+          _score: scoreMemoryRow(r, terms)
+            + (preferredSource && normalizeMemorySource(r.source_ai) === preferredSource ? 5 : 0)
+            - (isLowValueTestMemory(r) ? 3 : 0)
+        }))
         .sort((a, b) => b._score - a._score || Number(b.id || 0) - Number(a.id || 0));
 
       for (const r of scoredRows) {
@@ -438,14 +555,17 @@ async function searchMemoryContext(db, projectCode, question, limit = 5) {
           detail: r.detail || '',
           tags: r.tags || '',
           score: r._score,
+          low_value_test_memory: isLowValueTestMemory(r),
           created_at: r.created_at
         });
+        if (sources.length >= safeLimit) break;
       }
     } catch (error) {
       // Keep the agent usable even if a legacy table has unexpected columns.
     }
 
     // Fallback: if keyword search finds nothing, load latest active project memories.
+    // When the user names Claude/ChatGPT/Gemini, this fallback still keeps that source filter.
     if (sources.length === 0) {
       try {
         const [rows] = await db.query(
@@ -453,12 +573,22 @@ async function searchMemoryContext(db, projectCode, question, limit = 5) {
            FROM ai_memory
            WHERE ${projectWhere}
              AND (status IS NULL OR status = 'active')
+             ${aiMemorySourceFilter.sql}
            ORDER BY id DESC
-           LIMIT ${safeLimit}`,
+           LIMIT ${safeLimit * 4}`,
           projectAliases
         );
 
-        for (const r of rows) {
+        const scoredRows = rows
+          .filter((r) => preferredSource || !isLowValueTestMemory(r))
+          .map((r) => ({
+            ...r,
+            _score: (preferredSource && normalizeMemorySource(r.source_ai) === preferredSource ? 5 : 0)
+              - (isLowValueTestMemory(r) ? 3 : 0)
+          }))
+          .sort((a, b) => b._score - a._score || Number(b.id || 0) - Number(a.id || 0));
+
+        for (const r of scoredRows) {
           addSource({
             source_type: 'ai_memory_fallback_latest',
             id: r.id,
@@ -469,9 +599,11 @@ async function searchMemoryContext(db, projectCode, question, limit = 5) {
             text: r.summary || r.detail || '',
             detail: r.detail || '',
             tags: r.tags || '',
-            score: 0,
+            score: r._score,
+            low_value_test_memory: isLowValueTestMemory(r),
             created_at: r.created_at
           });
+          if (sources.length >= safeLimit) break;
         }
       } catch (error) {
         // ignore fallback failures
@@ -494,9 +626,10 @@ async function searchMemoryContext(db, projectCode, question, limit = 5) {
         `SELECT id, project_code, source_platform, title, import_status, summary_queue_id, memory_id, created_at
          FROM raw_imported_conversations
          WHERE ${projectWhere}
+           ${rawImportSourceFilter.sql}
            ${keywordWhere}
          ORDER BY id DESC
-         LIMIT ${remaining}`,
+         LIMIT ${remaining * 3}`,
         params
       );
 
@@ -510,6 +643,7 @@ async function searchMemoryContext(db, projectCode, question, limit = 5) {
           text: `Import status: ${r.import_status || ''}; summary_queue_id: ${r.summary_queue_id || ''}; memory_id: ${r.memory_id || ''}`,
           created_at: r.created_at
         });
+        if (sources.length >= safeLimit) break;
       }
     } catch (error) {
       // ignore optional imported conversation search failures
@@ -518,6 +652,7 @@ async function searchMemoryContext(db, projectCode, question, limit = 5) {
 
   const trimmed = sources.slice(0, safeLimit).map((s) => ({
     ...s,
+    normalized_source: normalizeMemorySource(s.source_ai || s.source_platform || ''),
     text: String(s.text || '').replace(/\s+/g, ' ').slice(0, 900),
     detail: String(s.detail || '').replace(/\s+/g, ' ').slice(0, 900)
   }));
@@ -527,6 +662,9 @@ async function searchMemoryContext(db, projectCode, question, limit = 5) {
     project_aliases: projectAliases,
     query: question,
     search_terms: terms,
+    preferred_source: preferredSource || 'all',
+    source_filter_applied: preferredSource ? true : false,
+    deduplication_applied: true,
     used_memory_count: trimmed.length,
     sources: trimmed,
     context_summary: trimmed.map((s, i) => {
@@ -537,14 +675,135 @@ async function searchMemoryContext(db, projectCode, question, limit = 5) {
   };
 }
 
+
+function inferGatewayQuestionType(question = '') {
+  const q = String(question || '').toLowerCase();
+  if (/(정상적인 결과|결과가 정상|agent answer|used_memory_count|provider decision|검색 결과|품질|진단)/i.test(q)) return 'agent_result_diagnosis';
+  if (/(번역|translate|translation)/i.test(q)) return 'translation';
+  if (/(gemini|제미니|google|구글)/i.test(q)) return 'google_context';
+  if (/(요약|정리|summarize|summary|간략|import|가져온|불러온|memory|기억|대화|클로드|claude|chatgpt|gemini)/i.test(q)) return 'memory_summary';
+  if (/(patch|diff|code|coding|bug|error|api|route|server|npm|git|db|sql|코드|오류|버그|패치|서버|개발|수정)/i.test(q)) return 'coding';
+  if (/(사업|전략|계획|투자|판단|분석|리스크|process|schedule|roadmap|strategy|plan|analyze)/i.test(q)) return 'strategy';
+  return 'general';
+}
+
+function buildGatewayProviderDecision({ question, requestedProvider, context, liveRequested, allowFallback }) {
+  const normalizedProvider = normalizeProvider(requestedProvider || 'auto');
+  const questionType = inferGatewayQuestionType(question);
+  const preferredSource = detectPreferredSource(question);
+  const memoryCount = Number(context?.used_memory_count || 0);
+  const memoryEnough = memoryCount > 0 && ['memory_summary', 'general'].includes(questionType);
+
+  let selectedProvider = 'openai';
+  let selectedModelFamily = 'OpenAI';
+  let liveCallRecommended = true;
+  let estimatedCostLevel = 'medium';
+  let decisionReason = '일반 질문이므로 균형형 기본값인 OpenAI 계열을 우선 선택합니다.';
+
+  if (memoryEnough) {
+    selectedProvider = 'local';
+    selectedModelFamily = 'Local memory answer';
+    liveCallRecommended = false;
+    estimatedCostLevel = 'zero';
+    decisionReason = '저장된 memory만으로 답변 가능한 요약/정리 질문이므로 외부 AI 호출을 생략합니다.';
+  } else if (questionType === 'coding') {
+    selectedProvider = 'anthropic';
+    selectedModelFamily = 'Claude';
+    estimatedCostLevel = 'medium';
+    decisionReason = '코딩, 오류, 패치, 긴 코드 문맥 분석 요청이므로 Claude 계열을 우선 선택합니다.';
+  } else if (questionType === 'strategy') {
+    selectedProvider = 'openai';
+    selectedModelFamily = 'OpenAI';
+    estimatedCostLevel = 'medium';
+    decisionReason = '사업 전략, 계획, 분석형 질문이므로 구조화 답변과 추론에 강한 OpenAI 계열을 우선 선택합니다.';
+  } else if (questionType === 'google_context' || preferredSource === 'google') {
+    selectedProvider = 'google';
+    selectedModelFamily = 'Gemini';
+    estimatedCostLevel = 'medium';
+    decisionReason = 'Google/Gemini 관련 문맥이 강하므로 Gemini 계열을 우선 선택합니다.';
+  } else if (preferredSource === 'claude') {
+    if (memoryCount > 0) {
+      selectedProvider = 'local';
+      selectedModelFamily = 'Local Claude memory answer';
+      liveCallRecommended = false;
+      estimatedCostLevel = 'zero';
+      decisionReason = '질문이 Claude import memory 요약에 가깝고 관련 memory가 있으므로 외부 Claude 호출 없이 저장된 기억으로 답변합니다.';
+    } else {
+      selectedProvider = 'anthropic';
+      selectedModelFamily = 'Claude';
+      estimatedCostLevel = 'medium';
+      decisionReason = 'Claude 관련 질문이지만 저장된 memory가 부족하므로 Claude 계열 호출이 적합합니다.';
+    }
+  } else if (preferredSource === 'chatgpt') {
+    selectedProvider = memoryCount > 0 ? 'local' : 'openai';
+    selectedModelFamily = memoryCount > 0 ? 'Local ChatGPT memory answer' : 'OpenAI';
+    liveCallRecommended = memoryCount <= 0;
+    estimatedCostLevel = memoryCount > 0 ? 'zero' : 'medium';
+    decisionReason = memoryCount > 0
+      ? 'ChatGPT import memory가 검색되었으므로 우선 저장된 기억만으로 답변합니다.'
+      : 'ChatGPT/OpenAI 관련 질문이지만 저장된 memory가 부족하므로 OpenAI 계열 호출이 적합합니다.';
+  }
+
+  if (normalizedProvider && normalizedProvider !== 'auto') {
+    selectedProvider = normalizedProvider;
+    selectedModelFamily = normalizedProvider;
+    liveCallRecommended = normalizedProvider !== 'mock' && normalizedProvider !== 'local';
+    estimatedCostLevel = normalizedProvider === 'mock' ? 'zero' : 'medium';
+    decisionReason = `사용자가 provider=${normalizedProvider}를 직접 선택했으므로 자동 선택 대신 해당 provider를 사용합니다.`;
+  }
+
+  const liveCallAllowed = Boolean(liveRequested && liveCallRecommended && selectedProvider !== 'local' && selectedProvider !== 'mock');
+
+  return {
+    strategy: 'balanced',
+    question_type: questionType,
+    requested_provider: normalizedProvider,
+    selected_provider: selectedProvider,
+    selected_model_family: selectedModelFamily,
+    live_call_recommended: liveCallRecommended,
+    live_call_requested: Boolean(liveRequested),
+    live_call_allowed: liveCallAllowed,
+    estimated_cost_level: estimatedCostLevel,
+    memory_enough_for_local_answer: Boolean(memoryEnough || selectedProvider === 'local'),
+    allow_fallback: allowFallback !== false,
+    decision_reason: decisionReason
+  };
+}
+
+function buildProviderDecisionAnswer(question, projectCode, context, decision) {
+  const readableSummary = buildReadableContextSummary(context?.sources || [], question);
+  const liveOffNote = decision.live_call_recommended && !decision.live_call_allowed
+    ? '\n\n참고: 이 질문은 외부 AI 호출을 사용하면 더 좋은 답변이 가능합니다. 현재 live=false이므로 실제 API 호출은 하지 않았습니다.'
+    : '';
+  return [
+    `Agent Decision: ${decision.selected_provider}`,
+    `질문 유형: ${decision.question_type}`,
+    `선택 이유: ${decision.decision_reason}`,
+    `예상 비용 수준: ${decision.estimated_cost_level}`,
+    `Live 호출: ${decision.live_call_allowed ? 'yes' : 'no'}`,
+    '',
+    `프로젝트: ${projectCode}`,
+    `불러온 memory: ${context?.used_memory_count || 0}건`,
+    `Memory source filter: ${context?.preferred_source || 'all'}`,
+    `Deduplication: ${context?.deduplication_applied ? 'on' : 'off'}`,
+    '',
+    readableSummary,
+    liveOffNote
+  ].join('\n');
+}
+
 function buildMockAnswer(question, projectCode, context) {
   const count = context?.used_memory_count || 0;
+  const readableSummary = buildReadableContextSummary(context?.sources || [], question);
   return [
-    `Personal AI Agent mock answer for project: ${projectCode}`,
-    `Question: ${question}`,
-    `Loaded memory/context items: ${count}`,
-    count > 0 ? '검색된 memory context를 기반으로 다음 단계를 제안할 준비가 되었습니다.' : '현재 검색된 memory가 적습니다. 실제 import/summary가 늘어나면 context 품질이 개선됩니다.',
-    'Phase 17-4 connects this agent flow to the provider router.'
+    `프로젝트: ${projectCode}`,
+    `모드: mock / safe test`,
+    '',
+    '아래 답변은 실제 LLM 호출이 아니라, 검색된 memory를 사람이 읽기 쉽게 정리한 테스트 응답입니다. ChatGPT처럼 자연스러운 생성 답변은 provider=auto 또는 openai/anthropic/google + live=true에서 확인할 수 있습니다.',
+    '',
+    `불러온 memory: ${count}건`,
+    '',
+    readableSummary
   ].join('\n');
 }
 
@@ -587,14 +846,40 @@ async function executeProviderAnswer({ question, detected, context, payload }) {
   const liveRequested = isTruthy(payload.live) || isTruthy(process.env.AI_AGENT_LIVE_MODE);
   const allowFallback = payload.allow_fallback !== false;
   const intent = payload.intent || inferIntent(question);
-  const prompt = buildProviderPrompt({
+  const gatewayDecision = buildGatewayProviderDecision({
+    question,
+    requestedProvider,
+    context,
+    liveRequested,
+    allowFallback
+  });
+  const prompt = payload.provider_prompt_override || buildProviderPrompt({
     question,
     projectCode: detected.detected_project_code,
     context,
     detection: detected
   });
 
-  if (requestedProvider === 'mock' || !providerRouter || !modelProvider?.testProviderAdapter) {
+  if (gatewayDecision.selected_provider === 'local') {
+    return {
+      answer: buildProviderDecisionAnswer(question, detected.detected_project_code, context, gatewayDecision),
+      provider_used: 'local',
+      provider_model: 'memory-only-balanced-agent',
+      provider_route: {
+        ok: true,
+        route_status: 'LOCAL_MEMORY_ANSWER',
+        selected_provider: 'local',
+        selected_model: 'memory-only-balanced-agent',
+        gateway_decision: gatewayDecision
+      },
+      provider_response: { adapter_status: 'LOCAL_MEMORY_ANSWER', gateway_decision: gatewayDecision },
+      gateway_decision: gatewayDecision,
+      live_requested: liveRequested,
+      fallback_used: false
+    };
+  }
+
+  if (requestedProvider === 'mock' || gatewayDecision.selected_provider === 'mock' || !providerRouter || !modelProvider?.testProviderAdapter) {
     return {
       answer: buildMockAnswer(question, detected.detected_project_code, context),
       provider_used: 'mock',
@@ -603,15 +888,36 @@ async function executeProviderAnswer({ question, detected, context, payload }) {
         ok: Boolean(providerRouter),
         route_status: providerRouter ? 'MOCK_FORCED' : 'PROVIDER_ROUTER_NOT_AVAILABLE',
         selected_provider: 'mock',
-        selected_model: process.env.MOCK_DEFAULT_MODEL || 'mock-model'
+        selected_model: process.env.MOCK_DEFAULT_MODEL || 'mock-model',
+        gateway_decision: gatewayDecision
       },
-      provider_response: { adapter_status: 'MOCK_AGENT_RESPONSE' },
+      provider_response: { adapter_status: 'MOCK_AGENT_RESPONSE', gateway_decision: gatewayDecision },
+      gateway_decision: gatewayDecision,
       live_requested: liveRequested,
       fallback_used: requestedProvider !== 'mock'
     };
   }
 
-  const preferredProvider = requestedProvider === 'auto' ? null : requestedProvider;
+  if (!gatewayDecision.live_call_allowed) {
+    return {
+      answer: buildProviderDecisionAnswer(question, detected.detected_project_code, context, gatewayDecision),
+      provider_used: 'decision_only',
+      provider_model: gatewayDecision.selected_provider,
+      provider_route: {
+        ok: true,
+        route_status: 'PROVIDER_SELECTED_BUT_LIVE_DISABLED',
+        selected_provider: gatewayDecision.selected_provider,
+        selected_model: gatewayDecision.selected_model_family,
+        gateway_decision: gatewayDecision
+      },
+      provider_response: { adapter_status: 'LIVE_DISABLED_COST_GUARD', gateway_decision: gatewayDecision },
+      gateway_decision: gatewayDecision,
+      live_requested: liveRequested,
+      fallback_used: false
+    };
+  }
+
+  const preferredProvider = gatewayDecision.selected_provider;
   const route = await providerRouter.selectProviderRoute({
     intent,
     preferred_provider: preferredProvider,
@@ -628,19 +934,28 @@ async function executeProviderAnswer({ question, detected, context, payload }) {
         answer: `Provider route selection failed. ${route.errors?.join('; ') || ''}`,
         provider_used: 'none',
         provider_model: null,
-        provider_route: route,
+        provider_route: { ...route, gateway_decision: gatewayDecision },
         provider_response: null,
+        gateway_decision: gatewayDecision,
         live_requested: liveRequested,
         fallback_used: false
       };
     }
 
     return {
-      answer: buildMockAnswer(question, detected.detected_project_code, context),
-      provider_used: 'mock',
-      provider_model: process.env.MOCK_DEFAULT_MODEL || 'mock-model',
-      provider_route: route,
-      provider_response: { adapter_status: 'MOCK_FALLBACK_AFTER_ROUTE_FAILURE' },
+      answer: buildProviderDecisionAnswer(question, detected.detected_project_code, context, {
+        ...gatewayDecision,
+        selected_provider: 'local',
+        selected_model_family: 'Local fallback',
+        live_call_allowed: false,
+        estimated_cost_level: 'zero',
+        decision_reason: `Provider route failed, so the Agent used local memory fallback. ${route.errors?.join('; ') || ''}`
+      }),
+      provider_used: 'local',
+      provider_model: 'memory-only-fallback',
+      provider_route: { ...route, gateway_decision: gatewayDecision },
+      provider_response: { adapter_status: 'LOCAL_FALLBACK_AFTER_ROUTE_FAILURE', gateway_decision: gatewayDecision },
+      gateway_decision: gatewayDecision,
       live_requested: liveRequested,
       fallback_used: true
     };
@@ -658,19 +973,28 @@ async function executeProviderAnswer({ question, detected, context, payload }) {
       answer: extractProviderAnswer(providerTest),
       provider_used: route.selected_provider,
       provider_model: route.selected_model,
-      provider_route: route,
+      provider_route: { ...route, gateway_decision: gatewayDecision },
       provider_response: providerTest,
+      gateway_decision: gatewayDecision,
       live_requested: liveRequested,
       fallback_used: requestedProvider !== 'auto' && route.selected_provider !== requestedProvider
     };
   } catch (error) {
     if (!allowFallback) throw error;
     return {
-      answer: buildMockAnswer(question, detected.detected_project_code, context) + `\n\n[Provider fallback note] ${error.message}`,
-      provider_used: 'mock',
-      provider_model: process.env.MOCK_DEFAULT_MODEL || 'mock-model',
-      provider_route: route,
-      provider_response: { adapter_status: 'PROVIDER_EXECUTION_FAILED_MOCK_FALLBACK', error: error.message },
+      answer: buildProviderDecisionAnswer(question, detected.detected_project_code, context, {
+        ...gatewayDecision,
+        selected_provider: 'local',
+        selected_model_family: 'Local fallback',
+        live_call_allowed: false,
+        estimated_cost_level: 'zero',
+        decision_reason: `Provider execution failed, so the Agent used local memory fallback. ${error.message}`
+      }),
+      provider_used: 'local',
+      provider_model: 'memory-only-fallback',
+      provider_route: route ? { ...route, gateway_decision: gatewayDecision } : { gateway_decision: gatewayDecision },
+      provider_response: { adapter_status: 'PROVIDER_EXECUTION_FAILED_LOCAL_FALLBACK', error: error.message, gateway_decision: gatewayDecision },
+      gateway_decision: gatewayDecision,
       live_requested: liveRequested,
       fallback_used: true
     };
@@ -785,7 +1109,8 @@ async function continueProject(db, payload = {}) {
   const response = await ask(db, {
     ...payload,
     project_code: projectCode,
-    question: continuePrompt,
+    question,
+    provider_prompt_override: continuePrompt,
     provider: payload.provider || 'mock',
     context_limit: payload.context_limit || 8,
     enqueue_summary: payload.enqueue_summary === true,
@@ -871,8 +1196,8 @@ async function ask(db, payload = {}) {
 
   const [result] = await db.query(
     `INSERT INTO personal_agent_interactions
-      (agent_session_id, agent_turn_no, user_question, detected_project_code, provider_requested, provider_used, provider_model, provider_route_payload, provider_response_payload, provider_live_requested, provider_fallback_used, context_summary, context_payload, answer, answer_summary, used_memory_count, used_context_sources, detection_confidence, detection_reason, matched_keywords, save_status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (agent_session_id, agent_turn_no, user_question, detected_project_code, provider_requested, provider_used, provider_model, provider_route_payload, provider_response_payload, provider_live_requested, provider_fallback_used, context_summary, context_payload, answer, answer_summary, question_type, gateway_selected_provider, gateway_live_call_recommended, gateway_cost_level, gateway_decision_reason, gateway_decision_payload, used_memory_count, used_context_sources, detection_confidence, detection_reason, matched_keywords, save_status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       agentSessionId,
       agentTurnNo,
@@ -889,6 +1214,12 @@ async function ask(db, payload = {}) {
       safeJson(context),
       providerResult.answer,
       answerSummary,
+      providerResult.gateway_decision?.question_type || null,
+      providerResult.gateway_decision?.selected_provider || null,
+      providerResult.gateway_decision?.live_call_recommended ? 1 : 0,
+      providerResult.gateway_decision?.estimated_cost_level || null,
+      providerResult.gateway_decision?.decision_reason || null,
+      safeJson(providerResult.gateway_decision || null),
       context.used_memory_count,
       safeJson(context.sources),
       detected.confidence,
@@ -958,6 +1289,12 @@ async function ask(db, payload = {}) {
     provider_live_requested: providerResult.live_requested,
     provider_fallback_used: providerResult.fallback_used,
     provider_route_status: providerResult.provider_route?.route_status || null,
+    gateway_decision: providerResult.gateway_decision || providerResult.provider_route?.gateway_decision || null,
+    question_type: providerResult.gateway_decision?.question_type || null,
+    selected_provider: providerResult.gateway_decision?.selected_provider || providerResult.provider_used,
+    estimated_cost_level: providerResult.gateway_decision?.estimated_cost_level || null,
+    live_call_allowed: providerResult.gateway_decision?.live_call_allowed || false,
+    decision_reason: providerResult.gateway_decision?.decision_reason || null,
     used_memory_count: context.used_memory_count,
     context_preview: context.context_summary,
     context_sources: context.sources,
@@ -1133,6 +1470,8 @@ module.exports = {
   detectProject,
   searchMemoryContext,
   executeProviderAnswer,
+  inferGatewayQuestionType,
+  buildGatewayProviderDecision,
   saveAgentConversationLog,
   queueAgentConversationForSummary,
   getRecentProjectInteractions,

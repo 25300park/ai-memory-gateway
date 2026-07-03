@@ -5649,84 +5649,108 @@
         <section id="personal-ai-agent" class="page-section">
           <h3>Personal AI Agent</h3>
           <p class="section-description">
-            Phase 17 restored full Admin UI + Phase 17-3~17-7 controls. This screen keeps the full dashboard layout while allowing
-            project detection, context search, Ask Agent, Continue Project, usage history, and operation log review.
+            Phase 18-1 upgrades the existing Phase 17 diagnostic panel into an Admin Agent Chat Console. It still uses the same
+            backend APIs, but the operator can now test Claude/ChatGPT/Gemini imported memory in a chat-like workflow without Postman.
           </p>
 
           <div class="grid two-columns">
             <div class="card">
-              <h4>Ask Agent</h4>
+              <h4>Agent Chat Console</h4>
+              <p class="card-note">
+                Use Continue Project when you want the Agent to load project memory, recent interactions, and conversation logs together.
+                Use Context Search when you only want to verify which memories were found.
+              </p>
+
               <div class="form-grid">
                 <label>
                   Project
                   <select id="agentProjectCode">
                     <option value="auto">Auto Detect</option>
+                    <option value="rbs_ai_memory" selected>RBS AI Memory / Import Test</option>
                     <option value="ai_memory_gateway">AI Memory Gateway</option>
                     <option value="rbs_homes">RBS Homes</option>
+                    <option value="sns_brokerage_automation">SNS Brokerage Automation</option>
                     <option value="runquest_ph">RunQuest PH</option>
                     <option value="philippines_franchise">Philippines Franchise</option>
                     <option value="bgc_office_acquisition">BGC Office Acquisition</option>
-                    <option value="rbs_ai_memory">RBS AI Memory / Import Test</option>
                   </select>
                 </label>
+
                 <label>
                   Provider
                   <select id="agentProvider">
-                    <option value="mock">Mock</option>
-                    <option value="auto">Auto</option>
-                    <option value="openai">OpenAI</option>
-                    <option value="anthropic">Claude</option>
-                    <option value="gemini">Gemini</option>
+                    <option value="auto" selected>Balanced Gateway Agent (recommended)</option>
+                    <option value="local">Local Memory Only (no token cost)</option>
+                    <option value="mock">Mock / Safe Test (no real AI)</option>
+                    <option value="openai">Force OpenAI</option>
+                    <option value="anthropic">Force Claude</option>
+                    <option value="google">Force Gemini / Google</option>
                   </select>
                 </label>
+
                 <label>
                   Context Limit
-                  <input id="agentContextLimit" type="number" value="5" min="1" max="20" />
+                  <input id="agentContextLimit" type="number" value="10" min="1" max="20" />
                 </label>
+
                 <label>
                   Recent Limit
                   <input id="agentRecentLimit" type="number" value="5" min="1" max="20" />
                 </label>
+
                 <label class="checkbox-label">
                   <input id="agentLive" type="checkbox" />
                   Live provider
                 </label>
+
                 <label class="checkbox-label">
                   <input id="agentAllowFallback" type="checkbox" checked />
                   Allow fallback
                 </label>
+
                 <label class="checkbox-label">
                   <input id="agentEnqueueSummary" type="checkbox" />
                   Queue summary
                 </label>
               </div>
+
               <label class="full-width-label">
                 Question
-                <textarea id="agentQuestion" rows="7" placeholder="AI Memory Gateway 프로젝트 이어서 진행하겠습니다. 다음 단계 알려주세요."></textarea>
+                <textarea id="agentQuestion" rows="7" placeholder="Claude에서 import한 대화 내용을 포함해서 현재 상태와 다음 작업을 알려주세요.">Claude에서 import한 대화 내용을 포함해서 Admin에서 Agent 매물 관리와 관련해 지금까지 논의한 내용을 이어서 설명해주세요. 현재 상태와 다음 작업을 알려주세요.</textarea>
               </label>
+
+              <div class="button-row">
+                <button id="contextSearchAgentBtn" class="secondary-btn">1. Context Search</button>
+                <button id="askAgentBtn" class="primary-btn">2. Ask Agent</button>
+                <button id="continueAgentBtn" class="primary-btn">3. Continue Project</button>
+                <button id="quickClaudeAgentBtn" class="secondary-btn">Quick Claude Memory Test</button>
+                <button id="clearAgentChatBtn" class="secondary-btn">Clear Chat View</button>
+              </div>
+
               <div class="button-row">
                 <button id="loadAgentStatusBtn" class="secondary-btn">Load Agent Status</button>
                 <button id="loadAgentProjectsBtn" class="secondary-btn">Load Projects</button>
-                <button id="runAgentTestBtn" class="secondary-btn">Run Agent Test</button>
                 <button id="detectAgentProjectBtn" class="secondary-btn">Detect Project</button>
-                <button id="testAgentProjectDetectionBtn" class="secondary-btn">Test Detection Rules</button>
-                <button id="contextSearchAgentBtn" class="secondary-btn">Context Search</button>
-                <button id="askAgentBtn" class="primary-btn">Ask Agent</button>
-                <button id="continueAgentBtn" class="primary-btn">Continue Project</button>
+                <button id="runAgentTestBtn" class="secondary-btn">Run Agent Test</button>
                 <button id="continueAgentTestBtn" class="secondary-btn">Continue Test</button>
                 <button id="usageHistoryAgentBtn" class="secondary-btn">Usage History</button>
                 <button id="operationLogsAgentBtn" class="secondary-btn">Operation Logs</button>
                 <button id="operationLogTestAgentBtn" class="secondary-btn">Operation Log Test</button>
               </div>
-              <p id="agentInfo" class="muted">Ready.</p>
+
+              <p id="agentInfo" class="muted">Ready. Balanced Gateway Agent first checks memory and decides whether to answer locally or call OpenAI / Claude / Gemini. Turn on Live provider only when you want a real external API call.</p>
             </div>
 
             <div class="card metric-card">
-              <h4>Agent Status</h4>
+              <h4>Agent Run Summary</h4>
               <div class="metric-row"><span>Status</span><strong id="agentStatus">-</strong></div>
               <div class="metric-row"><span>Detected Project</span><strong id="agentDetectedProject">-</strong></div>
               <div class="metric-row"><span>Detection Confidence</span><strong id="agentDetectionConfidence">-</strong></div>
               <div class="metric-row"><span>Provider Used</span><strong id="agentProviderUsed">-</strong></div>
+              <div class="metric-row"><span>Question Type</span><strong id="agentQuestionType">-</strong></div>
+              <div class="metric-row"><span>Selected Provider</span><strong id="agentSelectedProvider">-</strong></div>
+              <div class="metric-row"><span>Live Decision</span><strong id="agentLiveDecision">-</strong></div>
+              <div class="metric-row"><span>Cost Level</span><strong id="agentCostLevel">-</strong></div>
               <div class="metric-row"><span>Used Memory</span><strong id="agentUsedMemory">-</strong></div>
               <div class="metric-row"><span>Interaction ID</span><strong id="agentInteractionId">-</strong></div>
               <div class="metric-row"><span>Save Status</span><strong id="agentSaveStatus">-</strong></div>
@@ -5737,8 +5761,16 @@
           </div>
 
           <div class="card">
-            <h4>Project Detection Details</h4>
-            <pre id="agentDetectionOutput" class="json-output">No detection result yet.</pre>
+            <h4>Agent Decision</h4>
+            <p class="card-note">
+              Balanced mode shows why the Gateway Agent answered locally or selected OpenAI / Claude / Gemini before spending tokens.
+            </p>
+            <pre id="agentDecisionOutput" class="json-output">No provider decision yet.</pre>
+          </div>
+
+          <div class="card">
+            <h4>Chat View</h4>
+            <div id="agentChatTranscript" class="json-output">No chat run yet. Mock mode will summarize loaded memory in a readable format; live provider mode is required for fully natural answers.</div>
           </div>
 
           <div class="card">
@@ -5748,6 +5780,9 @@
 
           <div class="card">
             <h4>Context Preview</h4>
+            <p class="card-note">
+              This table shows the actual memory sources loaded into the Agent prompt. For the Claude import test, Used Memory should be 1 or more.
+            </p>
             <table>
               <thead>
                 <tr>
@@ -5762,6 +5797,11 @@
                 <tr><td colspan="5">No context loaded.</td></tr>
               </tbody>
             </table>
+          </div>
+
+          <div class="card">
+            <h4>Project Detection Details</h4>
+            <pre id="agentDetectionOutput" class="json-output">No detection result yet.</pre>
           </div>
 
           <div class="card">
@@ -6513,6 +6553,7 @@
           allow_fallback: document.getElementById("agentAllowFallback")?.checked !== false,
           enqueue_summary: document.getElementById("agentEnqueueSummary")?.checked === true,
           summary_model: "gpt-4o-mini",
+          decision_mode: "balanced",
           question: document.getElementById("agentQuestion")?.value || "AI Memory Gateway 프로젝트 이어서 진행하겠습니다. 다음 단계 알려주세요."
         };
       }
@@ -6536,29 +6577,45 @@
       }
       function render171(data) {
         const result = extractAgentResult171(data);
-        const storage = result.storage || data.storage || {};
-        const context = result.context || data.context || {};
+        const nestedResponse = result.response || data.response || {};
+        const effective = nestedResponse && (nestedResponse.answer || nestedResponse.provider_used || nestedResponse.interaction_id) ? nestedResponse : result;
+        const storage = effective.storage || result.storage || data.storage || {};
+        const context = effective.context || result.context || data.context || {};
+        const decision = effective.gateway_decision || result.gateway_decision || data.gateway_decision || effective.provider_route?.gateway_decision || result.provider_route?.gateway_decision || effective.provider_response?.gateway_decision || result.provider_response?.gateway_decision || {};
+        const answer = effective.answer || result.answer || data.answer || "No answer yet.";
+        const usedMemory = effective.used_memory_count ?? result.used_memory_count ?? context.used_memory_count ?? data.used_memory_count ?? "-";
         set171("agentStatus", result.agent_status || data.test_status || result.continue_status || data.operation_logs_status || (result.ok ? "READY" : "-"));
-        set171("agentDetectedProject", result.detected_project_code || result.project_code || data.detected_project_code || "-");
-        set171("agentProviderUsed", result.provider_used || data.provider_used || result.provider || "-");
-        const confidence = result.detection_confidence ?? result.confidence ?? result.detection?.confidence ?? data.detection_confidence;
+        set171("agentDetectedProject", result.detected_project_code || effective.detected_project_code || result.project_code || data.detected_project_code || "-");
+        set171("agentProviderUsed", effective.provider_used || result.provider_used || data.provider_used || result.provider || "-");
+        set171("agentQuestionType", decision.question_type || effective.question_type || result.question_type || "-");
+        set171("agentSelectedProvider", decision.selected_provider || effective.selected_provider || result.selected_provider || "-");
+        set171("agentLiveDecision", decision.live_call_allowed ? "live call" : (decision.live_call_recommended ? "recommended but off" : "local/no live"));
+        set171("agentCostLevel", decision.estimated_cost_level || effective.estimated_cost_level || result.estimated_cost_level || "-");
+        const confidence = result.detection_confidence ?? result.confidence ?? result.detection?.confidence ?? effective.detection?.confidence ?? data.detection_confidence;
         set171("agentDetectionConfidence", confidence == null ? "-" : `${Math.round(Number(confidence) * 100)}%`);
-        set171("agentUsedMemory", result.used_memory_count ?? context.used_memory_count ?? data.used_memory_count ?? "-");
-        set171("agentInteractionId", result.interaction_id || data.interaction_id || "-");
-        set171("agentSaveStatus", storage.save_status || result.save_status || data.save_status || "-");
-        set171("agentConversationLogId", storage.conversation_log_id || result.conversation_log_id || data.conversation_log_id || "-");
-        set171("agentSummaryQueueId", storage.summary_queue_id || result.summary_queue_id || data.summary_queue_id || "-");
+        set171("agentUsedMemory", usedMemory);
+        set171("agentInteractionId", effective.interaction_id || result.interaction_id || data.interaction_id || "-");
+        set171("agentSaveStatus", storage.save_status || effective.save_status || result.save_status || data.save_status || "-");
+        set171("agentConversationLogId", storage.conversation_log?.conversation_log_id || storage.conversation_log_id || effective.conversation_log_id || result.conversation_log_id || data.conversation_log_id || "-");
+        set171("agentSummaryQueueId", storage.summary_queue?.summary_queue_id || storage.summary_queue_id || effective.summary_queue_id || result.summary_queue_id || data.summary_queue_id || "-");
         set171("agentContinueStatus", result.continue_status || data.continue_status || "-");
-        set171("agentInfo", `Phase 17 full dashboard UI loaded at ${new Date().toLocaleString()}`);
-        set171("agentAnswerOutput", result.answer || result.agent_answer || data.answer || "No answer yet.");
-        json171("agentDetectionOutput", result.detection || {
-          detected_project_code: result.detected_project_code || data.detected_project_code,
+        const decisionLine = decision.selected_provider ? `Decision: ${decision.selected_provider} / ${decision.question_type || "unknown"} / live=${decision.live_call_allowed ? "yes" : "no"}` : "Decision: not available";
+        set171("agentInfo", `Agent run rendered at ${new Date().toLocaleString()}. ${decisionLine}`);
+        json171("agentDecisionOutput", decision || {});
+        set171("agentAnswerOutput", answer);
+        set171("agentChatTranscript", `You:
+${payload171().question}
+
+Agent:
+${answer}`);
+        json171("agentDetectionOutput", result.detection || effective.detection || {
+          detected_project_code: result.detected_project_code || effective.detected_project_code || data.detected_project_code,
           confidence: result.confidence || result.detection_confidence || data.detection_confidence,
           detection_reason: result.detection_reason || data.detection_reason,
           matched_keywords: result.matched_keywords || data.matched_keywords,
           candidates: result.detection_candidates || result.candidates || data.candidates
         });
-        renderContext171(result.context_preview || context.context_preview || result.context_sources || context.sources || data.context_sources || []);
+        renderContext171(effective.context_sources || effective.context_preview || context.context_preview || result.context_sources || result.context_preview || context.sources || data.context_sources || []);
         json171("agentRawOutput", data);
       }
       function renderProjects171(data) {
