@@ -351,14 +351,14 @@ async function getGeminiClaudeImporterStatus() {
     sample_import_bodies: {
       gemini_json_or_zip: {
         source_platform: "gemini",
-        file_path: "Z:\\01. Ai_Memory_System\\imports\\gemini_takeout.zip",
+        file_path: "D:\\00. Ai_Memory_System\\imports\\gemini_takeout.zip",
         project_code: "rbs_ai_memory",
         skip_duplicates: true,
         limit: 3
       },
       claude_json_or_zip: {
         source_platform: "claude",
-        file_path: "Z:\\01. Ai_Memory_System\\imports\\claude_export.json",
+        file_path: "D:\\00. Ai_Memory_System\\imports\\claude_export.json",
         project_code: "rbs_ai_memory",
         skip_duplicates: true,
         limit: 3

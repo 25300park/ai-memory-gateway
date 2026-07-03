@@ -395,7 +395,7 @@ async function importChatGPTExportFromZip(options = {}) {
         message: "zip_file_path is required. Put the ChatGPT export ZIP on the server PC, then pass its full path."
       },
       sample_body: {
-        zip_file_path: "Z:\\01. Ai_Memory_System\\imports\\chatgpt_export.zip",
+        zip_file_path: "D:\\00. Ai_Memory_System\\imports\\chatgpt_export.zip",
         project_code: "rbs_ai_memory",
         skip_duplicates: true
       }
