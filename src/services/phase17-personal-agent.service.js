@@ -333,57 +333,207 @@ async function detectProject(db, question, requestedProjectCode = 'auto') {
   };
 }
 
+function getProjectAliases(projectCode) {
+  const normalized = String(projectCode || '').trim();
+  const aliases = new Set();
+  if (normalized) aliases.add(normalized);
+
+  const aliasMap = {
+    ai_memory_gateway: ['ai_memory_gateway', 'rbs_ai_memory'],
+    rbs_ai_memory: ['rbs_ai_memory', 'ai_memory_gateway'],
+    rbs_homes: ['rbs_homes', 'sns_brokerage_automation'],
+    sns_brokerage_automation: ['sns_brokerage_automation', 'rbs_homes']
+  };
+
+  for (const value of aliasMap[normalized] || []) aliases.add(value);
+  return Array.from(aliases).filter(Boolean);
+}
+
+function buildSearchTerms(question = '') {
+  const raw = String(question || '').trim();
+  const tokens = raw
+    .toLowerCase()
+    .replace(/["'`~!@#$%^&*()_+=\[\]{}|\\:;,.<>/?-]/g, ' ')
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .filter((t) => t.length >= 2)
+    .filter((t) => !['the', 'and', 'for', 'with', 'from', 'this', 'that', 'about', 'into', 'your', 'you', 'are', 'was', 'were', '내용', '관련', '이어서', '설명해주세요', '프로젝트'].includes(t));
+
+  const unique = [];
+  for (const token of tokens) {
+    if (!unique.includes(token)) unique.push(token);
+    if (unique.length >= 8) break;
+  }
+
+  return unique.length ? unique : raw ? [raw.slice(0, 80)] : [];
+}
+
+function scoreMemoryRow(row, terms = []) {
+  const haystack = [row.title, row.summary, row.detail, row.tags, row.source_ai]
+    .map((v) => String(v || '').toLowerCase())
+    .join(' ');
+  let score = 0;
+  for (const term of terms) {
+    if (term && haystack.includes(String(term).toLowerCase())) score += 1;
+  }
+  if (String(row.source_ai || '').toLowerCase() === 'claude') score += 0.15;
+  if (String(row.status || '').toLowerCase() === 'active') score += 0.1;
+  return score;
+}
+
 async function searchMemoryContext(db, projectCode, question, limit = 5) {
   const safeLimit = Math.max(1, Math.min(Number(limit || 5), 20));
-  const keyword = String(question || '').trim().slice(0, 200);
-  const like = `%${keyword.split(/\s+/).filter(Boolean).slice(0, 5).join('%')}%`;
+  const projectAliases = getProjectAliases(projectCode);
+  const terms = buildSearchTerms(question);
   const sources = [];
+  const seen = new Set();
+
+  function addSource(source) {
+    const key = `${source.source_type}:${source.id}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    sources.push(source);
+  }
+
+  const projectWhere = projectAliases.length
+    ? `project_code IN (${projectAliases.map(() => '?').join(',')})`
+    : '1=1';
 
   if (await tableExists(db, 'ai_memory')) {
     try {
+      const likeClauses = [];
+      const params = [...projectAliases];
+      for (const term of terms) {
+        const like = `%${term}%`;
+        likeClauses.push('(title LIKE ? OR summary LIKE ? OR detail LIKE ? OR tags LIKE ? OR source_ai LIKE ?)');
+        params.push(like, like, like, like, like);
+      }
+
+      const keywordWhere = likeClauses.length ? `AND (${likeClauses.join(' OR ')})` : '';
       const [rows] = await db.query(
-        `SELECT id, project_code, title, memory_text, summary, created_at
+        `SELECT id, project_code, source_ai, memory_type, title, summary, detail, tags, status, created_at
          FROM ai_memory
-         WHERE (? IS NULL OR project_code = ?)
-           AND (title LIKE ? OR memory_text LIKE ? OR summary LIKE ?)
+         WHERE ${projectWhere}
+           AND (status IS NULL OR status = 'active')
+           ${keywordWhere}
          ORDER BY id DESC
          LIMIT ${safeLimit}`,
-        [projectCode, projectCode, like, like, like]
+        params
       );
-      for (const r of rows) {
-        sources.push({ source_type: 'ai_memory', id: r.id, title: r.title, text: r.summary || r.memory_text || '', created_at: r.created_at });
+
+      const scoredRows = rows
+        .map((r) => ({ ...r, _score: scoreMemoryRow(r, terms) }))
+        .sort((a, b) => b._score - a._score || Number(b.id || 0) - Number(a.id || 0));
+
+      for (const r of scoredRows) {
+        addSource({
+          source_type: 'ai_memory',
+          id: r.id,
+          project_code: r.project_code,
+          source_ai: r.source_ai,
+          memory_type: r.memory_type,
+          title: r.title,
+          text: r.summary || r.detail || '',
+          detail: r.detail || '',
+          tags: r.tags || '',
+          score: r._score,
+          created_at: r.created_at
+        });
       }
-    } catch (_) {}
+    } catch (error) {
+      // Keep the agent usable even if a legacy table has unexpected columns.
+    }
+
+    // Fallback: if keyword search finds nothing, load latest active project memories.
+    if (sources.length === 0) {
+      try {
+        const [rows] = await db.query(
+          `SELECT id, project_code, source_ai, memory_type, title, summary, detail, tags, status, created_at
+           FROM ai_memory
+           WHERE ${projectWhere}
+             AND (status IS NULL OR status = 'active')
+           ORDER BY id DESC
+           LIMIT ${safeLimit}`,
+          projectAliases
+        );
+
+        for (const r of rows) {
+          addSource({
+            source_type: 'ai_memory_fallback_latest',
+            id: r.id,
+            project_code: r.project_code,
+            source_ai: r.source_ai,
+            memory_type: r.memory_type,
+            title: r.title,
+            text: r.summary || r.detail || '',
+            detail: r.detail || '',
+            tags: r.tags || '',
+            score: 0,
+            created_at: r.created_at
+          });
+        }
+      } catch (error) {
+        // ignore fallback failures
+      }
+    }
   }
 
   if (sources.length < safeLimit && await tableExists(db, 'raw_imported_conversations')) {
     try {
-      const [rows] = await db.query(
-        `SELECT id, project_code, source_platform, title, conversation_text, created_at
-         FROM raw_imported_conversations
-         WHERE (? IS NULL OR project_code = ?)
-           AND (title LIKE ? OR conversation_text LIKE ?)
-         ORDER BY id DESC
-         LIMIT ${safeLimit}`,
-        [projectCode, projectCode, like, like]
-      );
-      for (const r of rows) {
-        sources.push({ source_type: 'raw_imported_conversations', id: r.id, title: r.title, text: r.conversation_text || '', source_platform: r.source_platform, created_at: r.created_at });
+      const remaining = safeLimit - sources.length;
+      const likeClauses = [];
+      const params = [...projectAliases];
+      for (const term of terms) {
+        const like = `%${term}%`;
+        likeClauses.push('(title LIKE ? OR source_platform LIKE ? OR import_status LIKE ?)');
+        params.push(like, like, like);
       }
-    } catch (_) {}
+      const keywordWhere = likeClauses.length ? `AND (${likeClauses.join(' OR ')})` : '';
+      const [rows] = await db.query(
+        `SELECT id, project_code, source_platform, title, import_status, summary_queue_id, memory_id, created_at
+         FROM raw_imported_conversations
+         WHERE ${projectWhere}
+           ${keywordWhere}
+         ORDER BY id DESC
+         LIMIT ${remaining}`,
+        params
+      );
+
+      for (const r of rows) {
+        addSource({
+          source_type: 'raw_imported_conversations',
+          id: r.id,
+          project_code: r.project_code,
+          source_platform: r.source_platform,
+          title: r.title,
+          text: `Import status: ${r.import_status || ''}; summary_queue_id: ${r.summary_queue_id || ''}; memory_id: ${r.memory_id || ''}`,
+          created_at: r.created_at
+        });
+      }
+    } catch (error) {
+      // ignore optional imported conversation search failures
+    }
   }
 
   const trimmed = sources.slice(0, safeLimit).map((s) => ({
     ...s,
-    text: String(s.text || '').replace(/\s+/g, ' ').slice(0, 700)
+    text: String(s.text || '').replace(/\s+/g, ' ').slice(0, 900),
+    detail: String(s.detail || '').replace(/\s+/g, ' ').slice(0, 900)
   }));
 
   return {
     project_code: projectCode,
+    project_aliases: projectAliases,
     query: question,
+    search_terms: terms,
     used_memory_count: trimmed.length,
     sources: trimmed,
-    context_summary: trimmed.map((s, i) => `[${i + 1}] ${s.source_type}#${s.id} ${s.title || ''}: ${s.text}`).join('\n')
+    context_summary: trimmed.map((s, i) => {
+      const sourceLabel = s.source_ai || s.source_platform || '';
+      const body = s.text || s.detail || '';
+      return `[${i + 1}] ${s.source_type}#${s.id} ${sourceLabel} ${s.title || ''}: ${body}`;
+    }).join('\n')
   };
 }
 
