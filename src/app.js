@@ -10,6 +10,7 @@ const {
 const { requestLogger } = require("./middlewares/request-logger.middleware");
 const path = require("path");
 const adminAuthMiddleware = require("./middlewares/admin-auth.middleware");
+const adminApiAuthMiddleware = require("./middlewares/admin-api-auth.middleware");
 
 app.set("json replacer", (key, value) =>
   typeof value === "bigint" ? value.toString() : value
@@ -44,7 +45,7 @@ app.get("/health/db", async (req, res) => {
 
 app.use("/admin", adminAuthMiddleware, express.static(path.join(__dirname, "public/admin")));
 
-app.use("/ai", aiRoutes);
+app.use("/ai", adminApiAuthMiddleware, aiRoutes);
 
 // 404 handler: 등록되지 않은 route 처리
 app.use(notFoundHandler);
