@@ -1462,6 +1462,30 @@ async function listSessions(db, payload = {}) {
   return { ok: true, sessions };
 }
 
+async function getSessionDetail(db, sessionId) {
+  await ensureTables(db);
+  const [rows] = await db.query(
+    `SELECT agent_turn_no, user_question, answer, provider_used,
+            question_type, used_memory_count, created_at
+     FROM personal_agent_interactions
+     WHERE agent_session_id = ?
+     ORDER BY created_at ASC`,
+    [sessionId]
+  );
+
+  const turns = rows.map((r) => ({
+    agent_turn_no: r.agent_turn_no,
+    user_question: r.user_question,
+    answer: r.answer,
+    provider_used: r.provider_used,
+    question_type: r.question_type,
+    used_memory_count: r.used_memory_count,
+    created_at: r.created_at
+  }));
+
+  return { ok: true, agent_session_id: sessionId, turns };
+}
+
 async function getOperationLogs(db, payload = {}) {
   await ensureOperationLogsTable(db);
   const limit = Math.min(Number(payload.limit || 50), 200);
@@ -1526,6 +1550,7 @@ module.exports = {
   getOperationLogsStatus,
   getUsageHistory,
   listSessions,
+  getSessionDetail,
   getOperationLogs,
   operationLogsTest
 };

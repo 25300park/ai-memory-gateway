@@ -29,6 +29,10 @@ router.get('/agent/sessions', asyncHandler(async (req, res) => {
   }));
 }));
 
+router.get('/agent/sessions/:sessionId', asyncHandler(async (req, res) => {
+  res.json(await personalAgent.getSessionDetail(db, req.params.sessionId));
+}));
+
 router.post('/agent/detect-project', asyncHandler(async (req, res) => {
   const result = await personalAgent.detectProject(db, req.body.question, req.body.project_code || 'auto');
   res.json({ ok: true, ...result });
