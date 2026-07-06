@@ -670,6 +670,12 @@ async function searchMemoryContext(db, projectCode, question, limit = 5) {
     detail: String(s.detail || '').replace(/\s+/g, ' ').slice(0, 900)
   }));
 
+  // Distinguish sources that actually matched the user's keywords from the
+  // "no keyword hit, so just show the latest active memories" fallback, so
+  // callers do not treat unrelated fallback memory as strong evidence.
+  const hasKeywordMatchedSource = trimmed.some((s) => s.source_type !== 'ai_memory_fallback_latest');
+  const matchType = trimmed.length === 0 ? 'none' : (hasKeywordMatchedSource ? 'keyword' : 'fallback');
+
   return {
     project_code: projectCode,
     project_aliases: projectAliases,
@@ -678,6 +684,7 @@ async function searchMemoryContext(db, projectCode, question, limit = 5) {
     preferred_source: preferredSource || 'all',
     source_filter_applied: preferredSource ? true : false,
     deduplication_applied: true,
+    match_type: matchType,
     used_memory_count: trimmed.length,
     sources: trimmed,
     context_summary: trimmed.map((s, i) => {
@@ -705,7 +712,8 @@ function buildGatewayProviderDecision({ question, requestedProvider, context, li
   const questionType = inferGatewayQuestionType(question);
   const preferredSource = detectPreferredSource(question);
   const memoryCount = Number(context?.used_memory_count || 0);
-  const memoryEnough = memoryCount > 0 && ['memory_summary', 'general'].includes(questionType);
+  const matchType = context?.match_type || 'none';
+  const memoryEnough = memoryCount > 0 && matchType === 'keyword' && ['memory_summary', 'general'].includes(questionType);
 
   let selectedProvider = 'openai';
   let selectedModelFamily = 'OpenAI';
@@ -755,6 +763,15 @@ function buildGatewayProviderDecision({ question, requestedProvider, context, li
     decisionReason = memoryCount > 0
       ? 'ChatGPT import memory가 검색되었으므로 우선 저장된 기억만으로 답변합니다.'
       : 'ChatGPT/OpenAI 관련 질문이지만 저장된 memory가 부족하므로 OpenAI 계열 호출이 적합합니다.';
+  } else if (matchType !== 'keyword' && ['memory_summary', 'general'].includes(questionType)) {
+    // No keyword-matched memory backs this question (only unrelated fallback memory, or none
+    // at all), so we deliberately do not answer confidently from local memory. This is a minimal
+    // safety net; wiring this to an actual live call is left for a later phase.
+    selectedProvider = 'openai';
+    selectedModelFamily = 'OpenAI';
+    liveCallRecommended = true;
+    estimatedCostLevel = 'low';
+    decisionReason = '관련된 저장 정보를 찾지 못했습니다. 실시간 질의가 필요한 질문으로 판단하여 OpenAI 계열 호출을 권장합니다.';
   }
 
   if (normalizedProvider && normalizedProvider !== 'auto') {
