@@ -85,6 +85,16 @@ async function ensureColumn(db, tableName, columnName, definition) {
   }
 }
 
+async function ensureUniqueIndex(db, tableName, indexName, columns) {
+  try {
+    const [rows] = await db.query(`SHOW INDEX FROM ${tableName} WHERE Key_name = ?`, [indexName]);
+    if (rows.length > 0) return;
+    await db.query(`ALTER TABLE ${tableName} ADD UNIQUE INDEX ${indexName} (${columns.join(', ')})`);
+  } catch (_) {
+    // Do not block the agent flow if legacy duplicate rows prevent the index from being created.
+  }
+}
+
 
 async function countRows(db, tableName, whereSql = '', params = []) {
   try {
@@ -261,6 +271,9 @@ async function ensureTables(db) {
   await ensureColumn(db, 'personal_agent_interactions', 'gateway_cost_level', 'VARCHAR(40) NULL AFTER gateway_live_call_recommended');
   await ensureColumn(db, 'personal_agent_interactions', 'gateway_decision_reason', 'TEXT NULL AFTER gateway_cost_level');
   await ensureColumn(db, 'personal_agent_interactions', 'gateway_decision_payload', 'LONGTEXT NULL AFTER gateway_decision_reason');
+  await ensureColumn(db, 'personal_agent_interactions', 'status', "VARCHAR(40) NULL AFTER used_context_sources");
+  await ensureColumn(db, 'personal_agent_interactions', 'error_message', 'TEXT NULL AFTER status');
+  await ensureUniqueIndex(db, 'personal_agent_interactions', 'uniq_session_turn', ['agent_session_id', 'agent_turn_no']);
 
   await db.query(`
     CREATE TABLE IF NOT EXISTS personal_agent_project_rules (
@@ -957,7 +970,8 @@ async function executeProviderAnswer({ question, detected, context, payload }) {
       provider_response: { adapter_status: 'LOCAL_FALLBACK_AFTER_ROUTE_FAILURE', gateway_decision: gatewayDecision },
       gateway_decision: gatewayDecision,
       live_requested: liveRequested,
-      fallback_used: true
+      fallback_used: true,
+      error_message: route.errors?.join('; ') || 'Provider route selection failed.'
     };
   }
 
@@ -996,7 +1010,8 @@ async function executeProviderAnswer({ question, detected, context, payload }) {
       provider_response: { adapter_status: 'PROVIDER_EXECUTION_FAILED_LOCAL_FALLBACK', error: error.message, gateway_decision: gatewayDecision },
       gateway_decision: gatewayDecision,
       live_requested: liveRequested,
-      fallback_used: true
+      fallback_used: true,
+      error_message: error.message
     };
   }
 }
@@ -1189,45 +1204,97 @@ async function ask(db, payload = {}) {
   const requestedProvider = normalizeProvider(payload.provider || 'auto');
   const detected = await detectProject(db, question, payload.project_code || 'auto');
   const context = await searchMemoryContext(db, detected.detected_project_code, question, payload.context_limit || 5);
-  const providerResult = await executeProviderAnswer({ question, detected, context, payload: { ...payload, provider: requestedProvider } });
   const agentSessionId = buildAgentSessionId(detected.detected_project_code, payload);
-  const agentTurnNo = await getNextAgentTurnNo(db, agentSessionId);
+
+  let providerResult;
+  try {
+    providerResult = await executeProviderAnswer({ question, detected, context, payload: { ...payload, provider: requestedProvider } });
+  } catch (error) {
+    // Provider call failed and allow_fallback was false, so executeProviderAnswer rethrew.
+    // Record the failure (best-effort) before propagating the original error.
+    try {
+      const failedTurnNo = await getNextAgentTurnNo(db, agentSessionId);
+      await db.query(
+        `INSERT INTO personal_agent_interactions
+          (agent_session_id, agent_turn_no, user_question, detected_project_code, provider_requested, context_summary, context_payload, used_memory_count, used_context_sources, detection_confidence, detection_reason, matched_keywords, status, error_message, save_status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          agentSessionId,
+          failedTurnNo,
+          question,
+          detected.detected_project_code,
+          requestedProvider,
+          context.context_summary,
+          safeJson(context),
+          context.used_memory_count,
+          safeJson(context.sources),
+          detected.confidence,
+          detected.detection_reason,
+          JSON.stringify(detected.matched_keywords || []),
+          'failed',
+          error.message,
+          'provider_call_failed'
+        ]
+      );
+    } catch (_) {
+      // Do not mask the original provider error with a failure-logging error.
+    }
+    throw error;
+  }
+
+  const hadProviderError = Boolean(providerResult.error_message);
+  const interactionStatus = hadProviderError ? 'fallback_on_error' : 'ok';
+  const interactionErrorMessage = hadProviderError ? providerResult.error_message : null;
   const answerSummary = summarizeAnswer(providerResult.answer);
 
-  const [result] = await db.query(
-    `INSERT INTO personal_agent_interactions
-      (agent_session_id, agent_turn_no, user_question, detected_project_code, provider_requested, provider_used, provider_model, provider_route_payload, provider_response_payload, provider_live_requested, provider_fallback_used, context_summary, context_payload, answer, answer_summary, question_type, gateway_selected_provider, gateway_live_call_recommended, gateway_cost_level, gateway_decision_reason, gateway_decision_payload, used_memory_count, used_context_sources, detection_confidence, detection_reason, matched_keywords, save_status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      agentSessionId,
-      agentTurnNo,
-      question,
-      detected.detected_project_code,
-      requestedProvider,
-      providerResult.provider_used,
-      providerResult.provider_model,
-      safeJson(providerResult.provider_route),
-      safeJson(providerResult.provider_response),
-      providerResult.live_requested ? 1 : 0,
-      providerResult.fallback_used ? 1 : 0,
-      context.context_summary,
-      safeJson(context),
-      providerResult.answer,
-      answerSummary,
-      providerResult.gateway_decision?.question_type || null,
-      providerResult.gateway_decision?.selected_provider || null,
-      providerResult.gateway_decision?.live_call_recommended ? 1 : 0,
-      providerResult.gateway_decision?.estimated_cost_level || null,
-      providerResult.gateway_decision?.decision_reason || null,
-      safeJson(providerResult.gateway_decision || null),
-      context.used_memory_count,
-      safeJson(context.sources),
-      detected.confidence,
-      detected.detection_reason,
-      JSON.stringify(detected.matched_keywords || []),
-      'interaction_saved'
-    ]
-  );
+  let agentTurnNo = await getNextAgentTurnNo(db, agentSessionId);
+  let result;
+  const maxAttempts = 3; // initial attempt + up to 2 retries on turn_no collision
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      [result] = await db.query(
+        `INSERT INTO personal_agent_interactions
+          (agent_session_id, agent_turn_no, user_question, detected_project_code, provider_requested, provider_used, provider_model, provider_route_payload, provider_response_payload, provider_live_requested, provider_fallback_used, context_summary, context_payload, answer, answer_summary, question_type, gateway_selected_provider, gateway_live_call_recommended, gateway_cost_level, gateway_decision_reason, gateway_decision_payload, used_memory_count, used_context_sources, detection_confidence, detection_reason, matched_keywords, save_status, status, error_message)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          agentSessionId,
+          agentTurnNo,
+          question,
+          detected.detected_project_code,
+          requestedProvider,
+          providerResult.provider_used,
+          providerResult.provider_model,
+          safeJson(providerResult.provider_route),
+          safeJson(providerResult.provider_response),
+          providerResult.live_requested ? 1 : 0,
+          providerResult.fallback_used ? 1 : 0,
+          context.context_summary,
+          safeJson(context),
+          providerResult.answer,
+          answerSummary,
+          providerResult.gateway_decision?.question_type || null,
+          providerResult.gateway_decision?.selected_provider || null,
+          providerResult.gateway_decision?.live_call_recommended ? 1 : 0,
+          providerResult.gateway_decision?.estimated_cost_level || null,
+          providerResult.gateway_decision?.decision_reason || null,
+          safeJson(providerResult.gateway_decision || null),
+          context.used_memory_count,
+          safeJson(context.sources),
+          detected.confidence,
+          detected.detection_reason,
+          JSON.stringify(detected.matched_keywords || []),
+          'interaction_saved',
+          interactionStatus,
+          interactionErrorMessage
+        ]
+      );
+      break;
+    } catch (error) {
+      const isDuplicateTurn = error?.code === 'ER_DUP_ENTRY' || error?.errno === 1062;
+      if (!isDuplicateTurn || attempt === maxAttempts) throw error;
+      agentTurnNo = await getNextAgentTurnNo(db, agentSessionId);
+    }
+  }
 
   const interactionId = Number(result.insertId);
   const logSave = await saveAgentConversationLog(db, {
