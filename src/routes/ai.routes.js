@@ -22,6 +22,13 @@ router.get('/agent/projects', asyncHandler(async (req, res) => {
   res.json({ ok: true, projects: await personalAgent.getProjectRules(db) });
 }));
 
+router.get('/agent/sessions', asyncHandler(async (req, res) => {
+  res.json(await personalAgent.listSessions(db, {
+    project_code: req.query.project_code,
+    limit: req.query.limit
+  }));
+}));
+
 router.post('/agent/detect-project', asyncHandler(async (req, res) => {
   const result = await personalAgent.detectProject(db, req.body.question, req.body.project_code || 'auto');
   res.json({ ok: true, ...result });

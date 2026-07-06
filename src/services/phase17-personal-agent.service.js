@@ -1422,6 +1422,46 @@ async function getUsageHistory(db, payload = {}) {
   };
 }
 
+async function listSessions(db, payload = {}) {
+  await ensureTables(db);
+  const limit = Math.min(Number(payload.limit || 50), 200);
+  const projectCode = payload.project_code && payload.project_code !== 'all' ? String(payload.project_code) : null;
+  const params = [];
+  const where = ['agent_session_id IS NOT NULL'];
+  if (projectCode) { where.push('detected_project_code = ?'); params.push(projectCode); }
+  const whereSql = where.join(' AND ');
+  params.push(limit);
+
+  const [rows] = await db.query(
+    `SELECT
+       agent_session_id,
+       detected_project_code AS project_code,
+       COUNT(*) AS turn_count,
+       MAX(created_at) AS last_created_at,
+       SUBSTRING(
+         (SELECT user_question FROM personal_agent_interactions p2
+          WHERE p2.agent_session_id = p1.agent_session_id
+          ORDER BY created_at ASC LIMIT 1), 1, 60
+       ) AS title
+     FROM personal_agent_interactions p1
+     WHERE ${whereSql}
+     GROUP BY agent_session_id, detected_project_code
+     ORDER BY last_created_at DESC
+     LIMIT ?`,
+    params
+  );
+
+  const sessions = rows.map((r) => ({
+    agent_session_id: r.agent_session_id,
+    project_code: r.project_code,
+    turn_count: Number(r.turn_count),
+    last_created_at: r.last_created_at,
+    title: r.title || ''
+  }));
+
+  return { ok: true, sessions };
+}
+
 async function getOperationLogs(db, payload = {}) {
   await ensureOperationLogsTable(db);
   const limit = Math.min(Number(payload.limit || 50), 200);
@@ -1485,6 +1525,7 @@ module.exports = {
   recordOperationLog,
   getOperationLogsStatus,
   getUsageHistory,
+  listSessions,
   getOperationLogs,
   operationLogsTest
 };
