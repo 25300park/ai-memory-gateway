@@ -382,7 +382,7 @@ function buildSearchTerms(question = '') {
     .map((t) => t.trim())
     .filter(Boolean)
     .filter((t) => t.length >= 2)
-    .filter((t) => !['the', 'and', 'for', 'with', 'from', 'this', 'that', 'about', 'into', 'your', 'you', 'are', 'was', 'were', '내용', '관련', '이어서', '설명해주세요', '프로젝트'].includes(t));
+    .filter((t) => !['the', 'and', 'for', 'with', 'from', 'this', 'that', 'about', 'into', 'your', 'you', 'are', 'was', 'were', '내용', '관련', '이어서', '설명해주세요', '프로젝트', '뭐가', '있는지', '알려줘', '해줘', '어떻게'].includes(t));
 
   const unique = [];
   for (const token of tokens) {
@@ -393,13 +393,30 @@ function buildSearchTerms(question = '') {
   return unique.length ? unique : raw ? [raw.slice(0, 80)] : [];
 }
 
+// Guards against a term being glued to *other* word characters as a prefix, e.g. "rbs" no
+// longer matches inside the unrelated identifier "rbs_viber", and "록" no longer matches as a
+// bare fragment inside "등록". The trailing edge is only checked for pure ASCII terms (Latin
+// letters/digits/underscore): Korean regularly attaches particles and verb/copula endings
+// directly onto a word with no space (e.g. "요약" + "입니다", "등록" + "했다"), so requiring a
+// non-Hangul character right after a Hangul term would reject perfectly ordinary matches. This
+// is not a real morphological analyzer - it only filters out the clearest false hits, and relies
+// on the minimum-match-score threshold (see MIN_KEYWORD_MATCH_SCORE) to catch same-word-wrong-topic
+// coincidences that no boundary rule can distinguish (e.g. "등록" used in an unrelated sentence).
+function buildWordBoundaryPattern(term) {
+  const escaped = String(term).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const isAsciiTerm = /^[a-z0-9_]+$/i.test(term);
+  const boundaryClass = '[a-z0-9_가-힣]';
+  const trailingGuard = isAsciiTerm ? `(?!${boundaryClass})` : '';
+  return new RegExp(`(?<!${boundaryClass})${escaped}${trailingGuard}`, 'i');
+}
+
 function scoreMemoryRow(row, terms = []) {
   const haystack = [row.title, row.summary, row.detail, row.tags, row.source_ai]
     .map((v) => String(v || '').toLowerCase())
     .join(' ');
   let score = 0;
   for (const term of terms) {
-    if (term && haystack.includes(String(term).toLowerCase())) score += 1;
+    if (term && buildWordBoundaryPattern(term).test(haystack)) score += 1;
   }
   if (String(row.source_ai || '').toLowerCase() === 'claude') score += 0.15;
   if (String(row.status || '').toLowerCase() === 'active') score += 0.1;
@@ -677,8 +694,17 @@ async function searchMemoryContext(db, projectCode, question, limit = 5) {
 
   // Distinguish sources that actually matched the user's keywords from the
   // "no keyword hit, so just show the latest active memories" fallback, so
-  // callers do not treat unrelated fallback memory as strong evidence.
-  const hasKeywordMatchedSource = trimmed.some((s) => s.source_type !== 'ai_memory_fallback_latest');
+  // callers do not treat unrelated fallback memory as strong evidence. A single
+  // low-scoring match (e.g. one short, common term) is not treated as reliable
+  // evidence either - ai_memory sources need a score high enough to reflect at
+  // least two matched terms (or one term plus both source/status bonuses).
+  const MIN_KEYWORD_MATCH_SCORE = 2;
+  const isReliableKeywordMatch = (s) => {
+    if (s.source_type === 'ai_memory_fallback_latest') return false;
+    if (s.source_type === 'ai_memory') return Number(s.score || 0) >= MIN_KEYWORD_MATCH_SCORE;
+    return true;
+  };
+  const hasKeywordMatchedSource = trimmed.some(isReliableKeywordMatch);
   const matchType = trimmed.length === 0 ? 'none' : (hasKeywordMatchedSource ? 'keyword' : 'fallback');
 
   return {
@@ -748,7 +774,7 @@ function buildGatewayProviderDecision({ question, requestedProvider, context, li
     estimatedCostLevel = 'medium';
     decisionReason = 'Google/Gemini 관련 문맥이 강하므로 Gemini 계열을 우선 선택합니다.';
   } else if (preferredSource === 'claude') {
-    if (memoryCount > 0) {
+    if (memoryCount > 0 && matchType === 'keyword') {
       selectedProvider = 'local';
       selectedModelFamily = 'Local Claude memory answer';
       liveCallRecommended = false;
@@ -761,11 +787,12 @@ function buildGatewayProviderDecision({ question, requestedProvider, context, li
       decisionReason = 'Claude 관련 질문이지만 저장된 memory가 부족하므로 Claude 계열 호출이 적합합니다.';
     }
   } else if (preferredSource === 'chatgpt') {
-    selectedProvider = memoryCount > 0 ? 'local' : 'openai';
-    selectedModelFamily = memoryCount > 0 ? 'Local ChatGPT memory answer' : 'OpenAI';
-    liveCallRecommended = memoryCount <= 0;
-    estimatedCostLevel = memoryCount > 0 ? 'zero' : 'medium';
-    decisionReason = memoryCount > 0
+    const chatgptMemoryReliable = memoryCount > 0 && matchType === 'keyword';
+    selectedProvider = chatgptMemoryReliable ? 'local' : 'openai';
+    selectedModelFamily = chatgptMemoryReliable ? 'Local ChatGPT memory answer' : 'OpenAI';
+    liveCallRecommended = !chatgptMemoryReliable;
+    estimatedCostLevel = chatgptMemoryReliable ? 'zero' : 'medium';
+    decisionReason = chatgptMemoryReliable
       ? 'ChatGPT import memory가 검색되었으므로 우선 저장된 기억만으로 답변합니다.'
       : 'ChatGPT/OpenAI 관련 질문이지만 저장된 memory가 부족하므로 OpenAI 계열 호출이 적합합니다.';
   } else if (matchType !== 'keyword' && ['memory_summary', 'general'].includes(questionType)) {
