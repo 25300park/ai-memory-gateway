@@ -25,6 +25,33 @@ try {
   modelProvider = null;
 }
 
+let crmTools = null;
+
+try {
+  crmTools = require('./crm-tools.service');
+} catch (error) {
+  crmTools = null;
+}
+
+// Phase 5-2: opt-in Anthropic tool-use (see payload.enable_crm_tool). Not wired into the
+// auto gateway decision yet - only used when a caller explicitly asks for it.
+const CRM_TOOLS = [
+  {
+    name: 'search_listings',
+    description: 'RBS-HOMES CRM에 등록된 매물을 검색합니다. 건물명/주소 키워드, 거래유형(RENT/SALE), 가격 범위로 필터링할 수 있습니다.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        keyword: { type: 'string', description: '건물명 또는 주소에 포함된 검색어 (예: BGC, Maridien)' },
+        transaction_type: { type: 'string', enum: ['RENT', 'SALE'], description: '거래 유형' },
+        min_price: { type: 'number', description: '최소 가격' },
+        max_price: { type: 'number', description: '최대 가격' }
+      },
+      required: []
+    }
+  }
+];
+
 const DEFAULT_PROJECTS = [
   { project_code: 'ai_memory_gateway', label: 'AI Memory Gateway', keywords: ['ai memory', 'memory gateway', 'phase 17', 'mini pc', 'github', 'importer'] },
   { project_code: 'rbs_homes', label: 'RBS Homes', keywords: ['rbs', 'rbs-homes', 'real estate', 'kakao', 'property', 'listing', '매물', '부동산'] },
@@ -903,10 +930,70 @@ function extractProviderAnswer(providerTest) {
   return JSON.stringify(providerTest, null, 2).slice(0, 4000);
 }
 
+// Phase 5-2: runs the search_listings tool-use loop against Anthropic. Only called when
+// payload.enable_crm_tool is true and the resolved provider is anthropic (see executeProviderAnswer).
+// Not part of the automatic gateway decision - this is an explicit opt-in per request.
+async function runAnthropicWithCrmTool({ prompt, route, liveRequested }) {
+  const firstCall = await modelProvider.testProviderAdapter({
+    provider: route.selected_provider,
+    model_name: route.selected_model,
+    prompt,
+    live: liveRequested,
+    tools: CRM_TOOLS
+  });
+
+  if (!firstCall || firstCall.ok === false) {
+    return { providerTest: firstCall, toolAudit: { tool_used: false } };
+  }
+
+  const contentBlocks = firstCall.response?.content_blocks || [];
+  const toolUseBlock = contentBlocks.find((block) => block.type === 'tool_use' && block.name === 'search_listings');
+
+  if (firstCall.response?.stop_reason !== 'tool_use' || !toolUseBlock) {
+    return { providerTest: firstCall, toolAudit: { tool_used: false } };
+  }
+
+  let resultRows = [];
+  let toolError = null;
+  try {
+    resultRows = crmTools ? await crmTools.searchListings(toolUseBlock.input || {}) : [];
+  } catch (error) {
+    toolError = error.message;
+  }
+
+  const toolResultContent = toolError ? JSON.stringify({ error: toolError }) : JSON.stringify(resultRows);
+
+  const followupMessages = [
+    { role: 'user', content: prompt },
+    { role: 'assistant', content: contentBlocks },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseBlock.id, content: toolResultContent }] }
+  ];
+
+  const secondCall = await modelProvider.testProviderAdapter({
+    provider: route.selected_provider,
+    model_name: route.selected_model,
+    prompt,
+    live: liveRequested,
+    messages_override: followupMessages
+  });
+
+  return {
+    providerTest: secondCall,
+    toolAudit: {
+      tool_used: true,
+      tool_name: toolUseBlock.name,
+      tool_input: toolUseBlock.input,
+      tool_result_count: Array.isArray(resultRows) ? resultRows.length : null,
+      tool_error: toolError
+    }
+  };
+}
+
 async function executeProviderAnswer({ question, detected, context, payload }) {
   const requestedProvider = normalizeProvider(payload.provider || 'auto');
   const liveRequested = isTruthy(payload.live) || isTruthy(process.env.AI_AGENT_LIVE_MODE);
   const allowFallback = payload.allow_fallback !== false;
+  const enableCrmTool = isTruthy(payload.enable_crm_tool);
   const intent = payload.intent || inferIntent(question);
   const gatewayDecision = buildGatewayProviderDecision({
     question,
@@ -1025,12 +1112,21 @@ async function executeProviderAnswer({ question, detected, context, payload }) {
   }
 
   try {
-    const providerTest = await modelProvider.testProviderAdapter({
-      provider: route.selected_provider,
-      model_name: route.selected_model,
-      prompt,
-      live: liveRequested
-    });
+    let providerTest;
+    let crmToolAudit = null;
+
+    if (enableCrmTool && route.selected_provider === 'anthropic' && crmTools) {
+      const toolRun = await runAnthropicWithCrmTool({ prompt, route, liveRequested });
+      providerTest = toolRun.providerTest;
+      crmToolAudit = toolRun.toolAudit;
+    } else {
+      providerTest = await modelProvider.testProviderAdapter({
+        provider: route.selected_provider,
+        model_name: route.selected_model,
+        prompt,
+        live: liveRequested
+      });
+    }
 
     // Provider adapters (testOpenAiLiveProvider / testAnthropicLiveProvider / testGeminiLiveProvider)
     // catch their own API errors internally and RETURN { ok: false, error: '...' } instead of
@@ -1052,7 +1148,8 @@ async function executeProviderAnswer({ question, detected, context, payload }) {
       provider_response: providerTest,
       gateway_decision: gatewayDecision,
       live_requested: liveRequested,
-      fallback_used: requestedProvider !== 'auto' && route.selected_provider !== requestedProvider
+      fallback_used: requestedProvider !== 'auto' && route.selected_provider !== requestedProvider,
+      crm_tool_audit: crmToolAudit
     };
   } catch (error) {
     if (!allowFallback) throw error;
@@ -1338,7 +1435,9 @@ async function ask(db, payload = {}) {
           providerResult.gateway_decision?.live_call_recommended ? 1 : 0,
           providerResult.gateway_decision?.estimated_cost_level || null,
           providerResult.gateway_decision?.decision_reason || null,
-          safeJson(providerResult.gateway_decision || null),
+          safeJson(providerResult.gateway_decision
+            ? { ...providerResult.gateway_decision, crm_tool_audit: providerResult.crm_tool_audit || null }
+            : { crm_tool_audit: providerResult.crm_tool_audit || null }),
           context.used_memory_count,
           safeJson(context.sources),
           detected.confidence,
@@ -1428,6 +1527,8 @@ async function ask(db, payload = {}) {
     context_sources: context.sources,
     answer: providerResult.answer,
     answer_summary: answerSummary,
+    crm_tool_used: Boolean(providerResult.crm_tool_audit?.tool_used),
+    crm_tool_audit: providerResult.crm_tool_audit || null,
     saved: true,
     storage: {
       save_status: finalSaveStatus,

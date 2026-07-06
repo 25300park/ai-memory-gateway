@@ -796,7 +796,7 @@ function normalizeAnthropicApiError(error) {
   };
 }
 
-async function callAnthropicLive({ modelProfile, finalPrompt, system_context_text = "" }) {
+async function callAnthropicLive({ modelProfile, finalPrompt, system_context_text = "", tools = null, messages_override = null }) {
   const normalized = normalizeModelProfile(modelProfile);
   const safety = assertAnthropicLiveSafety({ modelProfile: normalized, finalPrompt });
 
@@ -812,10 +812,16 @@ async function callAnthropicLive({ modelProfile, finalPrompt, system_context_tex
     model: normalized.model_name,
     max_tokens: Math.min(normalized.max_output_tokens || liveConfig.max_output_tokens, liveConfig.max_output_tokens),
     system: requestPreview.system || system_context_text || "You are a context-aware business assistant connected to AI Memory Gateway.",
-    messages: requestPreview.messages && requestPreview.messages.length
+    messages: messages_override || (requestPreview.messages && requestPreview.messages.length
       ? requestPreview.messages
-      : [{ role: "user", content: String(finalPrompt || "") }]
+      : [{ role: "user", content: String(finalPrompt || "") }])
   };
+
+  // Tool-use is opt-in per call (see phase17-personal-agent.service.js's enable_crm_tool
+  // flag) - it is never attached automatically, matching how live/provider overrides work.
+  if (Array.isArray(tools) && tools.length) {
+    payload.tools = tools;
+  }
 
   const response = await withTimeout(fetch(liveConfig.endpoint, {
     method: "POST",
@@ -854,6 +860,8 @@ async function callAnthropicLive({ modelProfile, finalPrompt, system_context_tex
     storedAssistantMessage: answer,
     raw_response_id: json?.id || null,
     usage: json?.usage || null,
+    stop_reason: json?.stop_reason || null,
+    content_blocks: Array.isArray(json?.content) ? json.content : [],
     safety,
     request_preview: {
       provider: "anthropic",
@@ -861,7 +869,8 @@ async function callAnthropicLive({ modelProfile, finalPrompt, system_context_tex
       model: normalized.model_name,
       prompt_length: String(finalPrompt || "").length,
       max_tokens: payload.max_tokens,
-      api_version: liveConfig.api_version
+      api_version: liveConfig.api_version,
+      tools_enabled: Boolean(payload.tools)
     }
   };
 }
@@ -971,7 +980,7 @@ async function listAnthropicAvailableModels({ limit = 100 } = {}) {
   }
 }
 
-async function testAnthropicLiveProvider({ model_name = null, prompt = "Phase 11-3 Anthropic live provider safety test.", live = false } = {}) {
+async function testAnthropicLiveProvider({ model_name = null, prompt = "Phase 11-3 Anthropic live provider safety test.", live = false, tools = null, messages_override = null } = {}) {
   const liveConfig = getAnthropicLiveConfig();
   const modelProfile = normalizeModelProfile({
     model_code: "anthropic_live_test",
@@ -1015,7 +1024,7 @@ async function testAnthropicLiveProvider({ model_name = null, prompt = "Phase 11
   }
 
   try {
-    const response = await callAnthropicLive({ modelProfile, finalPrompt: prompt });
+    const response = await callAnthropicLive({ modelProfile, finalPrompt: prompt, tools, messages_override });
 
     return {
       ok: true,
@@ -1388,7 +1397,7 @@ async function testGeminiLiveProvider({ model_name = null, prompt = "Phase 11-4 
   }
 }
 
-async function testProviderAdapter({ provider = "mock", model_name = null, prompt = "Hello", live = false } = {}) {
+async function testProviderAdapter({ provider = "mock", model_name = null, prompt = "Hello", live = false, tools = null, messages_override = null } = {}) {
   const normalizedProvider = normalizeProvider(provider);
   const catalogItem = PROVIDER_CATALOG.find((item) => item.provider === normalizedProvider) || PROVIDER_CATALOG.find((item) => item.provider === "mock");
 
@@ -1397,7 +1406,7 @@ async function testProviderAdapter({ provider = "mock", model_name = null, promp
   }
 
   if (normalizedProvider === "anthropic") {
-    return testAnthropicLiveProvider({ model_name: model_name || catalogItem.default_model, prompt, live });
+    return testAnthropicLiveProvider({ model_name: model_name || catalogItem.default_model, prompt, live, tools, messages_override });
   }
 
   if (normalizedProvider === "google") {
