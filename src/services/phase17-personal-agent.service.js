@@ -983,6 +983,18 @@ async function executeProviderAnswer({ question, detected, context, payload }) {
       live: liveRequested
     });
 
+    // Provider adapters (testOpenAiLiveProvider / testAnthropicLiveProvider / testGeminiLiveProvider)
+    // catch their own API errors internally and RETURN { ok: false, error: '...' } instead of
+    // throwing. Detect that here and convert it into a real error so it flows through the same
+    // catch block below (local fallback + error_message) instead of being treated as a success.
+    if (providerTest && providerTest.ok === false) {
+      const adapterError = new Error(
+        providerTest.error || `${route.selected_provider} adapter call failed (${providerTest.adapter_status || 'UNKNOWN'}).`
+      );
+      adapterError.provider_response = providerTest;
+      throw adapterError;
+    }
+
     return {
       answer: extractProviderAnswer(providerTest),
       provider_used: route.selected_provider,
@@ -1007,7 +1019,7 @@ async function executeProviderAnswer({ question, detected, context, payload }) {
       provider_used: 'local',
       provider_model: 'memory-only-fallback',
       provider_route: route ? { ...route, gateway_decision: gatewayDecision } : { gateway_decision: gatewayDecision },
-      provider_response: { adapter_status: 'PROVIDER_EXECUTION_FAILED_LOCAL_FALLBACK', error: error.message, gateway_decision: gatewayDecision },
+      provider_response: error.provider_response || { adapter_status: 'PROVIDER_EXECUTION_FAILED_LOCAL_FALLBACK', error: error.message, gateway_decision: gatewayDecision },
       gateway_decision: gatewayDecision,
       live_requested: liveRequested,
       fallback_used: true,
