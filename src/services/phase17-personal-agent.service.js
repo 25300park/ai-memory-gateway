@@ -34,7 +34,12 @@ const DEFAULT_PROJECTS = [
 ];
 
 function safeJson(value) {
-  try { return JSON.stringify(value || null); } catch (_) { return null; }
+  try {
+    return JSON.stringify(value || null, (key, val) => (typeof val === 'bigint' ? val.toString() : val));
+  } catch (error) {
+    console.warn('[safeJson] Failed to serialize value, storing null instead:', error.message);
+    return null;
+  }
 }
 
 function nowIso() { return new Date().toISOString(); }
