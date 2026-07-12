@@ -33,6 +33,14 @@ try {
   crmTools = null;
 }
 
+let githubTools = null;
+
+try {
+  githubTools = require('./github-tools.service');
+} catch (error) {
+  githubTools = null;
+}
+
 // Phase 5-2: opt-in Anthropic tool-use (see payload.enable_crm_tool). Not wired into the
 // auto gateway decision yet - only used when a caller explicitly asks for it.
 const CRM_TOOLS = [
@@ -51,6 +59,29 @@ const CRM_TOOLS = [
     }
   }
 ];
+
+// Phase 5-6: opt-in Anthropic tool-use (see payload.enable_github_tool). Read-only - returns
+// commit metadata (message/author/date/short sha) only, never diffs or file content.
+const GITHUB_TOOLS = [
+  {
+    name: 'get_recent_commits',
+    description: 'GitHub 저장소(ai-memory-gateway, ai-assistant-console)의 최근 커밋 목록을 조회합니다. 커밋 메시지/작성자/날짜/짧은 sha만 반환하며 diff나 파일 내용은 가져오지 않습니다.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        repo: { type: 'string', enum: ['ai-memory-gateway', 'ai-assistant-console'], description: '조회할 GitHub 저장소' },
+        limit: { type: 'number', description: '가져올 커밋 개수 (기본 5, 최대 20)' }
+      },
+      required: ['repo']
+    }
+  }
+];
+
+// Maps a tool_use block's `name` to the read-only handler that executes it.
+const TOOL_HANDLERS = {
+  search_listings: (input) => crmTools.searchListings(input || {}),
+  get_recent_commits: (input) => githubTools.getRecentCommits(input || {})
+};
 
 const DEFAULT_PROJECTS = [
   { project_code: 'ai_memory_gateway', label: 'AI Memory Gateway', keywords: ['ai memory', 'memory gateway', 'phase 17', 'mini pc', 'github', 'importer'] },
@@ -931,16 +962,17 @@ function extractProviderAnswer(providerTest) {
   return JSON.stringify(providerTest, null, 2).slice(0, 4000);
 }
 
-// Phase 5-2: runs the search_listings tool-use loop against Anthropic. Only called when
-// payload.enable_crm_tool is true and the resolved provider is anthropic (see executeProviderAnswer).
-// Not part of the automatic gateway decision - this is an explicit opt-in per request.
-async function runAnthropicWithCrmTool({ prompt, route, liveRequested }) {
+// Phase 5-2/5-6: runs a single-round-trip tool-use loop against Anthropic for whichever
+// tools are opt-in for this request (payload.enable_crm_tool / payload.enable_github_tool).
+// Only called when the resolved provider is anthropic (see executeProviderAnswer). Not part
+// of the automatic gateway decision - this is an explicit opt-in per request.
+async function runAnthropicWithTools({ prompt, route, liveRequested, tools }) {
   const firstCall = await modelProvider.testProviderAdapter({
     provider: route.selected_provider,
     model_name: route.selected_model,
     prompt,
     live: liveRequested,
-    tools: CRM_TOOLS
+    tools
   });
 
   if (!firstCall || firstCall.ok === false) {
@@ -948,21 +980,24 @@ async function runAnthropicWithCrmTool({ prompt, route, liveRequested }) {
   }
 
   const contentBlocks = firstCall.response?.content_blocks || [];
-  const toolUseBlock = contentBlocks.find((block) => block.type === 'tool_use' && block.name === 'search_listings');
+  const toolNames = tools.map((tool) => tool.name);
+  const toolUseBlock = contentBlocks.find((block) => block.type === 'tool_use' && toolNames.includes(block.name));
 
   if (firstCall.response?.stop_reason !== 'tool_use' || !toolUseBlock) {
     return { providerTest: firstCall, toolAudit: { tool_used: false } };
   }
 
-  let resultRows = [];
+  let resultData = null;
   let toolError = null;
   try {
-    resultRows = crmTools ? await crmTools.searchListings(toolUseBlock.input || {}) : [];
+    const handler = TOOL_HANDLERS[toolUseBlock.name];
+    if (!handler) throw new Error(`No handler registered for tool "${toolUseBlock.name}"`);
+    resultData = await handler(toolUseBlock.input);
   } catch (error) {
     toolError = error.message;
   }
 
-  const toolResultContent = toolError ? JSON.stringify({ error: toolError }) : JSON.stringify(resultRows);
+  const toolResultContent = toolError ? JSON.stringify({ error: toolError }) : JSON.stringify(resultData);
 
   const followupMessages = [
     { role: 'user', content: prompt },
@@ -984,7 +1019,8 @@ async function runAnthropicWithCrmTool({ prompt, route, liveRequested }) {
       tool_used: true,
       tool_name: toolUseBlock.name,
       tool_input: toolUseBlock.input,
-      tool_result_count: Array.isArray(resultRows) ? resultRows.length : null,
+      tool_result_count: Array.isArray(resultData) ? resultData.length : null,
+      tool_result: resultData,
       tool_error: toolError
     }
   };
@@ -995,6 +1031,7 @@ async function executeProviderAnswer({ question, detected, context, payload }) {
   const liveRequested = isTruthy(payload.live) || isTruthy(process.env.AI_AGENT_LIVE_MODE);
   const allowFallback = payload.allow_fallback !== false;
   const enableCrmTool = isTruthy(payload.enable_crm_tool);
+  const enableGithubTool = isTruthy(payload.enable_github_tool);
   const intent = payload.intent || inferIntent(question);
   const gatewayDecision = buildGatewayProviderDecision({
     question,
@@ -1114,12 +1151,16 @@ async function executeProviderAnswer({ question, detected, context, payload }) {
 
   try {
     let providerTest;
-    let crmToolAudit = null;
+    let toolAudit = null;
 
-    if (enableCrmTool && route.selected_provider === 'anthropic' && crmTools) {
-      const toolRun = await runAnthropicWithCrmTool({ prompt, route, liveRequested });
+    const activeTools = [];
+    if (enableCrmTool && crmTools) activeTools.push(...CRM_TOOLS);
+    if (enableGithubTool && githubTools) activeTools.push(...GITHUB_TOOLS);
+
+    if (activeTools.length && route.selected_provider === 'anthropic') {
+      const toolRun = await runAnthropicWithTools({ prompt, route, liveRequested, tools: activeTools });
       providerTest = toolRun.providerTest;
-      crmToolAudit = toolRun.toolAudit;
+      toolAudit = toolRun.toolAudit;
     } else {
       providerTest = await modelProvider.testProviderAdapter({
         provider: route.selected_provider,
@@ -1150,7 +1191,7 @@ async function executeProviderAnswer({ question, detected, context, payload }) {
       gateway_decision: gatewayDecision,
       live_requested: liveRequested,
       fallback_used: requestedProvider !== 'auto' && route.selected_provider !== requestedProvider,
-      crm_tool_audit: crmToolAudit
+      tool_audit: toolAudit
     };
   } catch (error) {
     if (!allowFallback) throw error;
@@ -1437,8 +1478,8 @@ async function ask(db, payload = {}) {
           providerResult.gateway_decision?.estimated_cost_level || null,
           providerResult.gateway_decision?.decision_reason || null,
           safeJson(providerResult.gateway_decision
-            ? { ...providerResult.gateway_decision, crm_tool_audit: providerResult.crm_tool_audit || null }
-            : { crm_tool_audit: providerResult.crm_tool_audit || null }),
+            ? { ...providerResult.gateway_decision, tool_audit: providerResult.tool_audit || null }
+            : { tool_audit: providerResult.tool_audit || null }),
           context.used_memory_count,
           safeJson(context.sources),
           detected.confidence,
@@ -1528,8 +1569,12 @@ async function ask(db, payload = {}) {
     context_sources: context.sources,
     answer: providerResult.answer,
     answer_summary: answerSummary,
-    crm_tool_used: Boolean(providerResult.crm_tool_audit?.tool_used),
-    crm_tool_audit: providerResult.crm_tool_audit || null,
+    tool_used: Boolean(providerResult.tool_audit?.tool_used),
+    tool_audit: providerResult.tool_audit || null,
+    crm_tool_used: Boolean(providerResult.tool_audit?.tool_used && providerResult.tool_audit?.tool_name === 'search_listings'),
+    crm_tool_audit: providerResult.tool_audit?.tool_name === 'search_listings' ? providerResult.tool_audit : null,
+    github_tool_used: Boolean(providerResult.tool_audit?.tool_used && providerResult.tool_audit?.tool_name === 'get_recent_commits'),
+    github_tool_audit: providerResult.tool_audit?.tool_name === 'get_recent_commits' ? providerResult.tool_audit : null,
     saved: true,
     storage: {
       save_status: finalSaveStatus,

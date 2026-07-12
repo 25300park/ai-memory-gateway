@@ -10,12 +10,13 @@
  * on Windows).
  *
  * Usage:
- *   node scripts/test-ask.js "질문 내용" [provider] [live] [enable_crm_tool] [project_code]
+ *   node scripts/test-ask.js "질문 내용" [provider] [live] [enable_crm_tool] [project_code] [enable_github_tool]
  *
  * Examples:
  *   node scripts/test-ask.js "안녕하세요"
  *   node scripts/test-ask.js "이 함수의 버그를 고쳐줘" anthropic true
  *   node scripts/test-ask.js "BGC 지역에 있는 매물 좀 찾아줘" anthropic true true rbs_homes
+ *   node scripts/test-ask.js "ai-memory-gateway에서 최근에 어떤 작업을 했어?" anthropic true false rbs_homes true
  */
 
 const path = require('path');
@@ -26,9 +27,10 @@ const provider = process.argv[3] || 'auto';
 const live = process.argv[4] === 'true';
 const enableCrmTool = process.argv[5] === 'true';
 const projectCode = process.argv[6];
+const enableGithubTool = process.argv[7] === 'true';
 
 if (!question) {
-  console.error('Usage: node scripts/test-ask.js "질문 내용" [provider] [live] [enable_crm_tool] [project_code]');
+  console.error('Usage: node scripts/test-ask.js "질문 내용" [provider] [live] [enable_crm_tool] [project_code] [enable_github_tool]');
   process.exit(1);
 }
 
@@ -47,7 +49,8 @@ async function main() {
       provider,
       live,
       enable_crm_tool: enableCrmTool,
-      project_code: projectCode
+      project_code: projectCode,
+      enable_github_tool: enableGithubTool
     })
   });
 
@@ -61,6 +64,8 @@ async function main() {
   console.log('interaction_id:', body.interaction_id);
   console.log('crm_tool_used:', body.crm_tool_used);
   console.log('crm_tool_audit:', JSON.stringify(body.crm_tool_audit));
+  console.log('github_tool_used:', body.github_tool_used);
+  console.log('github_tool_audit:', JSON.stringify(body.github_tool_audit));
   console.log('answer:', body.answer);
   console.log('');
   console.log('--- full response ---');
