@@ -3,6 +3,7 @@ const {
   getOpenAiLiveStatus,
   getAnthropicLiveStatus,
   getGeminiLiveStatus,
+  getLmStudioLiveStatus,
   testProviderAdapter
 } = require("./model-provider.service");
 
@@ -22,6 +23,7 @@ function normalizeProvider(provider) {
   if (["openai", "gpt"].includes(value)) return "openai";
   if (["anthropic", "claude"].includes(value)) return "anthropic";
   if (["google", "gemini"].includes(value)) return "google";
+  if (["lmstudio", "lm-studio", "lm studio"].includes(value)) return "lmstudio";
   if (["mock", "test"].includes(value)) return "mock";
   return value || "mock";
 }
@@ -108,6 +110,7 @@ function getDefaultModelForProvider(provider) {
   if (normalized === "openai") return process.env.OPENAI_DEFAULT_MODEL || "gpt-5.5";
   if (normalized === "anthropic") return process.env.ANTHROPIC_DEFAULT_MODEL || "claude-sonnet-4-5";
   if (normalized === "google") return process.env.GEMINI_DEFAULT_MODEL || "gemini-2.5-flash";
+  if (normalized === "lmstudio") return process.env.LMSTUDIO_MODEL || "google/gemma-4-e2b";
   return process.env.MOCK_DEFAULT_MODEL || "mock-model";
 }
 
@@ -116,6 +119,7 @@ function getProviderAllowed(provider) {
   if (normalized === "openai") return splitCsv(process.env.OPENAI_LIVE_ALLOWED_MODELS);
   if (normalized === "anthropic") return splitCsv(process.env.ANTHROPIC_LIVE_ALLOWED_MODELS);
   if (normalized === "google") return splitCsv(process.env.GEMINI_LIVE_ALLOWED_MODELS);
+  if (normalized === "lmstudio") return splitCsv(process.env.LMSTUDIO_LIVE_ALLOWED_MODELS);
   return [];
 }
 
@@ -124,6 +128,7 @@ async function getProviderSafetySnapshot() {
     openai: null,
     anthropic: null,
     google: null,
+    lmstudio: null,
     mock: {
       ok: true,
       provider: "mock",
@@ -158,6 +163,13 @@ async function getProviderSafetySnapshot() {
   } catch (error) {
     warnings.push(`Gemini status failed: ${error.message}`);
     snapshot.google = { ok: false, provider: "google", status: "STATUS_ERROR", error: error.message };
+  }
+
+  try {
+    snapshot.lmstudio = await getLmStudioLiveStatus();
+  } catch (error) {
+    warnings.push(`LM Studio status failed: ${error.message}`);
+    snapshot.lmstudio = { ok: false, provider: "lmstudio", status: "STATUS_ERROR", error: error.message };
   }
 
   return { snapshot, warnings };
@@ -207,12 +219,12 @@ async function getProviderRouterStatus() {
     ai_live_mode: isTruthy(process.env.AI_LIVE_MODE),
     default_provider: normalizeProvider(process.env.AI_ROUTER_DEFAULT_PROVIDER || "openai"),
     fallback_enabled: !["false", "0", "off"].includes(String(process.env.AI_ROUTER_FALLBACK_ENABLED || "true").toLowerCase()),
-    allowed_providers: splitCsv(process.env.AI_ROUTER_ALLOWED_PROVIDERS || "openai,anthropic,google,mock").map(normalizeProvider),
+    allowed_providers: splitCsv(process.env.AI_ROUTER_ALLOWED_PROVIDERS || "openai,anthropic,google,lmstudio,mock").map(normalizeProvider),
     live_required_by_default: isTruthy(process.env.AI_ROUTER_REQUIRE_LIVE),
     rules_count: ROUTING_RULES.length
   };
 
-  const providers = ["openai", "anthropic", "google", "mock"].map((provider) => buildCandidate(provider, snapshot[provider], { live: config.live_required_by_default }));
+  const providers = ["openai", "anthropic", "google", "lmstudio", "mock"].map((provider) => buildCandidate(provider, snapshot[provider], { live: config.live_required_by_default }));
 
   return {
     ok: true,
@@ -239,7 +251,7 @@ async function selectProviderRoute({
   const rule = getRuleForIntent(normalizedIntent);
   const liveRequired = require_live === null || require_live === undefined ? Boolean(live) : isTruthy(require_live);
   const fallbackEnabled = allow_fallback !== false && !["false", "0", "off"].includes(String(process.env.AI_ROUTER_FALLBACK_ENABLED || "true").toLowerCase());
-  const allowedProviders = splitCsv(process.env.AI_ROUTER_ALLOWED_PROVIDERS || "openai,anthropic,google,mock").map(normalizeProvider);
+  const allowedProviders = splitCsv(process.env.AI_ROUTER_ALLOWED_PROVIDERS || "openai,anthropic,google,lmstudio,mock").map(normalizeProvider);
   const defaultProvider = normalizeProvider(process.env.AI_ROUTER_DEFAULT_PROVIDER || rule.priority[0] || "openai");
 
   const basePriority = force_provider
@@ -412,7 +424,7 @@ async function selectProviderRouteWithFallbackSimulation(options = {}) {
   const rule = getRuleForIntent(normalizedIntent);
   const liveRequired = options.require_live === null || options.require_live === undefined ? Boolean(options.live) : isTruthy(options.require_live);
   const fallbackEnabled = options.allow_fallback !== false && !["false", "0", "off"].includes(String(process.env.AI_ROUTER_FALLBACK_ENABLED || "true").toLowerCase());
-  const allowedProviders = splitCsv(process.env.AI_ROUTER_ALLOWED_PROVIDERS || "openai,anthropic,google,mock").map(normalizeProvider);
+  const allowedProviders = splitCsv(process.env.AI_ROUTER_ALLOWED_PROVIDERS || "openai,anthropic,google,lmstudio,mock").map(normalizeProvider);
   const defaultProvider = normalizeProvider(process.env.AI_ROUTER_DEFAULT_PROVIDER || rule.priority[0] || "openai");
 
   const basePriority = options.force_provider
@@ -703,7 +715,7 @@ function getProviderRoutingRules() {
     },
     recommended_env: {
       AI_ROUTER_DEFAULT_PROVIDER: "openai",
-      AI_ROUTER_ALLOWED_PROVIDERS: "openai,anthropic,google,mock",
+      AI_ROUTER_ALLOWED_PROVIDERS: "openai,anthropic,google,lmstudio,mock",
       AI_ROUTER_FALLBACK_ENABLED: "true",
       AI_ROUTER_REQUIRE_LIVE: "false"
     }

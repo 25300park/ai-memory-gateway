@@ -33,6 +33,16 @@ const PROVIDER_CATALOG = [
     notes: "Phase 11-4 enables guarded Gemini generateContent live calls. AI_LIVE_MODE and GEMINI_LIVE_ENABLED must both be enabled."
   },
   {
+    provider: "lmstudio",
+    provider_name: "LM Studio",
+    env_key: "LMSTUDIO_BASE_URL",
+    default_model: process.env.LMSTUDIO_MODEL || "google/gemma-4-e2b",
+    live_supported: true,
+    sdk_required: "openai",
+    status: process.env.LMSTUDIO_BASE_URL ? "CONFIGURED" : "MISSING_BASE_URL",
+    notes: "LM Studio exposes an OpenAI-compatible local endpoint. AI_LIVE_MODE and LMSTUDIO_LIVE_ENABLED must both be enabled."
+  },
+  {
     provider: "mock",
     provider_name: "Mock Provider",
     env_key: null,
@@ -54,6 +64,7 @@ function normalizeProvider(provider) {
   if (["openai", "gpt", "chatgpt"].includes(raw)) return "openai";
   if (["anthropic", "claude"].includes(raw)) return "anthropic";
   if (["google", "gemini"].includes(raw)) return "google";
+  if (["lmstudio", "lm-studio", "lm studio"].includes(raw)) return "lmstudio";
   if (["mock", "test", "dry_run", "dry-run"].includes(raw)) return "mock";
 
   return raw || "mock";
@@ -208,30 +219,64 @@ function getGeminiLiveConfig() {
   };
 }
 
+function getLmStudioLiveConfig() {
+  const allowedModels = getCsvEnv("LMSTUDIO_LIVE_ALLOWED_MODELS");
+  const liveModeEnabled = isTruthy(process.env.AI_LIVE_MODE);
+  const lmStudioLiveEnabled = isTruthy(process.env.LMSTUDIO_LIVE_ENABLED);
+  const baseUrlConfigured = Boolean(process.env.LMSTUDIO_BASE_URL);
+
+  return {
+    live_mode_enabled: liveModeEnabled,
+    lmstudio_live_enabled: lmStudioLiveEnabled,
+    base_url_configured: baseUrlConfigured,
+    live_call_allowed: liveModeEnabled && lmStudioLiveEnabled && baseUrlConfigured,
+    default_model: process.env.LMSTUDIO_MODEL || "google/gemma-4-e2b",
+    allowed_models: allowedModels,
+    allowed_models_enforced: allowedModels.length > 0,
+    max_prompt_chars: parseNumber(process.env.LMSTUDIO_LIVE_MAX_PROMPT_CHARS, 12000),
+    timeout_ms: parseNumber(process.env.LMSTUDIO_LIVE_TIMEOUT_MS, 60000),
+    max_output_tokens: parseNumber(process.env.LMSTUDIO_MAX_OUTPUT_TOKENS, 1500),
+    send_temperature: isTruthy(process.env.LMSTUDIO_SEND_TEMPERATURE || process.env.OPENAI_SEND_TEMPERATURE),
+    endpoint: process.env.LMSTUDIO_BASE_URL || "http://localhost:1234/v1",
+    safety_notes: [
+      "Live LM Studio calls require AI_LIVE_MODE=true and LMSTUDIO_LIVE_ENABLED=true.",
+      "LMSTUDIO_BASE_URL must point to the local OpenAI-compatible server.",
+      "LMSTUDIO_LIVE_MAX_PROMPT_CHARS protects against unexpectedly large prompts.",
+      "LMSTUDIO_LIVE_ALLOWED_MODELS can restrict which local models are allowed for live calls."
+    ]
+  };
+}
+
 
 async function getProviderCatalog() {
   const liveConfig = getLiveModeConfig();
   const anthropicConfig = getAnthropicLiveConfig();
   const geminiConfig = getGeminiLiveConfig();
+  const lmstudioConfig = getLmStudioLiveConfig();
 
   return PROVIDER_CATALOG.map((provider) => ({
     ...provider,
     api_key_configured: provider.provider === "google"
       ? geminiConfig.api_key_configured
-      : provider.env_key
-        ? Boolean(process.env[provider.env_key])
-        : true,
+      : provider.provider === "lmstudio"
+        ? lmstudioConfig.base_url_configured
+        : provider.env_key
+          ? Boolean(process.env[provider.env_key])
+          : true,
     live_mode_enabled: liveConfig.live_mode_enabled,
     openai_live_enabled: provider.provider === "openai" ? liveConfig.openai_live_enabled : false,
     anthropic_live_enabled: provider.provider === "anthropic" ? anthropicConfig.anthropic_live_enabled : false,
     gemini_live_enabled: provider.provider === "google" ? geminiConfig.gemini_live_enabled : false,
+    lmstudio_live_enabled: provider.provider === "lmstudio" ? lmstudioConfig.lmstudio_live_enabled : false,
     live_call_allowed: provider.provider === "openai"
       ? liveConfig.live_call_allowed
       : provider.provider === "anthropic"
         ? anthropicConfig.live_call_allowed
         : provider.provider === "google"
           ? geminiConfig.live_call_allowed
-          : provider.provider === "mock"
+          : provider.provider === "lmstudio"
+            ? lmstudioConfig.live_call_allowed
+            : provider.provider === "mock"
   }));
 }
 
@@ -318,6 +363,17 @@ function buildProviderRequestPreview({ modelProfile, finalPrompt, system_context
           parts: [{ text: `${messages[0].content}\n\n${messages[1].content}` }]
         }
       ]
+    };
+  }
+
+  if (normalized.provider === "lmstudio") {
+    return {
+      provider: "lmstudio",
+      endpoint_type: "chat.completions.create",
+      model: normalized.model_name,
+      max_tokens: normalized.max_output_tokens,
+      messages,
+      temperature: normalized.temperature_default
     };
   }
 
@@ -509,6 +565,10 @@ async function callProviderModel({ modelProfile, finalPrompt, live = false, syst
 
   if (normalized.provider === "google") {
     return callGeminiLive({ modelProfile: normalized, finalPrompt, system_context_text });
+  }
+
+  if (normalized.provider === "lmstudio") {
+    return callLmStudioLive({ modelProfile: normalized, finalPrompt, system_context_text });
   }
 
   throw new Error(`${normalized.provider} live call is not enabled yet. Use mock mode or continue with the provider-specific Phase 11 connection step.`);
@@ -1115,6 +1175,274 @@ function extractGeminiResponseText(response) {
   return parts.join("\n").trim();
 }
 
+function assertLmStudioLiveSafety({ modelProfile, finalPrompt }) {
+  const normalized = normalizeModelProfile(modelProfile);
+  const liveConfig = getLmStudioLiveConfig();
+  const errors = [];
+  const warnings = [];
+
+  if (normalized.provider !== "lmstudio") {
+    errors.push("Live LM Studio safety check can only run for provider=lmstudio.");
+  }
+
+  if (!liveConfig.live_mode_enabled) {
+    errors.push("AI_LIVE_MODE is not enabled.");
+  }
+
+  if (!liveConfig.lmstudio_live_enabled) {
+    errors.push("LMSTUDIO_LIVE_ENABLED is not enabled.");
+  }
+
+  if (!liveConfig.base_url_configured) {
+    errors.push("LMSTUDIO_BASE_URL is not configured.");
+  }
+
+  if (!String(finalPrompt || "").trim()) {
+    errors.push("finalPrompt is empty.");
+  }
+
+  if (String(finalPrompt || "").length > liveConfig.max_prompt_chars) {
+    errors.push(`Prompt length exceeds LMSTUDIO_LIVE_MAX_PROMPT_CHARS. length=${String(finalPrompt || "").length}, max=${liveConfig.max_prompt_chars}`);
+  }
+
+  if (liveConfig.allowed_models_enforced && !liveConfig.allowed_models.includes(normalized.model_name)) {
+    errors.push(`Model ${normalized.model_name} is not in LMSTUDIO_LIVE_ALLOWED_MODELS.`);
+  }
+
+  if (!liveConfig.allowed_models_enforced) {
+    warnings.push("LMSTUDIO_LIVE_ALLOWED_MODELS is not set. Any selected local model can be used when live mode is enabled.");
+  }
+
+  return {
+    ok: errors.length === 0,
+    errors,
+    warnings,
+    live_config: liveConfig,
+    model_profile: normalized,
+    prompt_length: String(finalPrompt || "").length
+  };
+}
+
+function extractLmStudioResponseText(response) {
+  if (!response) return "";
+  if (typeof response?.choices?.[0]?.message?.content === "string") return response.choices[0].message.content;
+
+  const content = Array.isArray(response?.choices?.[0]?.message?.content) ? response.choices[0].message.content : [];
+  const parts = [];
+
+  for (const block of content) {
+    if (typeof block?.text === "string") parts.push(block.text);
+    if (typeof block?.content === "string") parts.push(block.content);
+  }
+
+  return parts.join("\n").trim();
+}
+
+function normalizeLmStudioApiError(error) {
+  const message = error?.message || String(error || "Unknown LM Studio error");
+  const status = error?.status || error?.http_status || null;
+  const isConnectionError = /fetch|network|ECONNREFUSED|ENOTFOUND|connect|timed out/i.test(message);
+
+  return {
+    ok: false,
+    phase: "11-6",
+    provider: "lmstudio",
+    adapter_status: isConnectionError ? "LMSTUDIO_CONNECTION_FAILED" : "LMSTUDIO_LIVE_CALL_FAILED",
+    live_requested: true,
+    http_status: status,
+    error: message,
+    diagnosis: isConnectionError
+      ? "LM Studio did not answer at the configured local endpoint. Confirm the server is running and LMSTUDIO_BASE_URL points to /v1."
+      : "LM Studio live call failed after passing the local safety gate.",
+    recommended_action: isConnectionError
+      ? [
+          "Start LM Studio and make sure the local server is listening on the LMSTUDIO_BASE_URL endpoint.",
+          "Verify the server exposes OpenAI-compatible /v1/chat/completions.",
+          "Retry with live=false to confirm the local adapter path is still healthy."
+        ]
+      : [
+          "Check LMSTUDIO_BASE_URL and the selected model in .env.",
+          "Run LM Studio Live Status again.",
+          "Retry with live=false to confirm the local adapter path is still healthy."
+        ]
+  };
+}
+
+async function callLmStudioLive({ modelProfile, finalPrompt, system_context_text = "" }) {
+  const normalized = normalizeModelProfile(modelProfile);
+  const safety = assertLmStudioLiveSafety({ modelProfile: normalized, finalPrompt });
+
+  if (!safety.ok) {
+    const error = new Error(`LM Studio live call blocked by safety gate: ${safety.errors.join(" | ")}`);
+    error.safety = safety;
+    throw error;
+  }
+
+  const liveConfig = getLmStudioLiveConfig();
+  const requestPreview = buildProviderRequestPreview({ modelProfile: normalized, finalPrompt, system_context_text });
+  const endpoint = `${String(liveConfig.endpoint || "http://localhost:1234/v1").replace(/\/$/, "")}/chat/completions`;
+  const payload = {
+    model: requestPreview.model,
+    messages: requestPreview.messages,
+    max_tokens: Math.min(normalized.max_output_tokens || liveConfig.max_output_tokens, liveConfig.max_output_tokens)
+  };
+
+  if (liveConfig.send_temperature) {
+    payload.temperature = normalized.temperature_default;
+  }
+
+  const response = await withTimeout(fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  }), liveConfig.timeout_ms);
+
+  const responseText = await response.text();
+  let json = null;
+  try { json = responseText ? JSON.parse(responseText) : null; } catch (_) { json = { raw_text: responseText }; }
+
+  if (!response.ok) {
+    const apiError = new Error(json?.error?.message || json?.message || responseText || `LM Studio API returned HTTP ${response.status}`);
+    apiError.status = response.status;
+    apiError.raw = json;
+    throw apiError;
+  }
+
+  const answer = extractLmStudioResponseText(json);
+
+  return {
+    provider: normalized.provider,
+    model_code: normalized.model_code,
+    model_name: normalized.model_name,
+    live_call: true,
+    endpoint_used: "chat.completions.create",
+    answer,
+    storedAssistantMessage: answer,
+    raw_response_id: json?.id || null,
+    usage: json?.usage || null,
+    safety,
+    request_preview: {
+      provider: "lmstudio",
+      endpoint_type: "chat.completions.create",
+      model: requestPreview.model,
+      prompt_length: String(finalPrompt || "").length,
+      max_output_tokens: payload.max_tokens
+    }
+  };
+}
+
+async function getLmStudioLiveStatus() {
+  const catalog = await getProviderCatalog();
+  const profiles = await listNormalizedModelProfiles({ provider: "lmstudio", include_inactive: true }).catch(() => []);
+  const liveConfig = getLmStudioLiveConfig();
+  const activeProfiles = profiles.filter((profile) => profile.is_active);
+
+  return {
+    ok: true,
+    phase: "11-6",
+    provider: "lmstudio",
+    status: liveConfig.live_call_allowed ? "READY_FOR_LIVE_TEST" : "NOT_READY",
+    live_config: liveConfig,
+    catalog_item: catalog.find((item) => item.provider === "lmstudio") || null,
+    profiles: {
+      count: profiles.length,
+      active_count: activeProfiles.length,
+      active_models: activeProfiles.map((profile) => profile.model_name)
+    },
+    checklist: [
+      { key: "ai_live_mode", label: "AI_LIVE_MODE=true", passed: liveConfig.live_mode_enabled },
+      { key: "lmstudio_live_enabled", label: "LMSTUDIO_LIVE_ENABLED=true", passed: liveConfig.lmstudio_live_enabled },
+      { key: "lmstudio_base_url", label: "LMSTUDIO_BASE_URL configured", passed: liveConfig.base_url_configured },
+      { key: "prompt_limit", label: "LMSTUDIO_LIVE_MAX_PROMPT_CHARS configured", passed: liveConfig.max_prompt_chars > 0 },
+      { key: "timeout", label: "LMSTUDIO_LIVE_TIMEOUT_MS configured", passed: liveConfig.timeout_ms > 0 }
+    ],
+    recommended_env: {
+      AI_LIVE_MODE: "false until live test is needed, then true",
+      LMSTUDIO_LIVE_ENABLED: "false until LM Studio live test is needed, then true",
+      LMSTUDIO_BASE_URL: liveConfig.endpoint,
+      LMSTUDIO_MODEL: liveConfig.default_model,
+      LMSTUDIO_LIVE_MAX_PROMPT_CHARS: String(liveConfig.max_prompt_chars),
+      LMSTUDIO_LIVE_TIMEOUT_MS: String(liveConfig.timeout_ms),
+      LMSTUDIO_MAX_OUTPUT_TOKENS: String(liveConfig.max_output_tokens),
+      LMSTUDIO_LIVE_ALLOWED_MODELS: liveConfig.allowed_models.join(",") || "optional"
+    }
+  };
+}
+
+async function testLmStudioLiveProvider({ model_name = null, prompt = "Phase 11-6 LM Studio live provider safety test.", live = false } = {}) {
+  const liveConfig = getLmStudioLiveConfig();
+  const modelProfile = normalizeModelProfile({
+    model_code: "lmstudio_live_test",
+    provider: "lmstudio",
+    model_name: model_name || liveConfig.default_model,
+    display_name: "LM Studio Live Provider Test",
+    max_output_tokens: Math.min(liveConfig.max_output_tokens, 500),
+    is_active: true
+  });
+
+  const safety = assertLmStudioLiveSafety({ modelProfile, finalPrompt: prompt });
+  const request_preview = buildProviderRequestPreview({ modelProfile, finalPrompt: prompt });
+
+  if (!live) {
+    return {
+      ok: true,
+      phase: "11-6",
+      provider: "lmstudio",
+      adapter_status: "LMSTUDIO_LIVE_DRY_RUN_READY",
+      live_requested: false,
+      live_mode_enabled: liveConfig.live_mode_enabled,
+      safety,
+      model_profile: modelProfile,
+      request_preview,
+      response: buildMockProviderResponse({ modelProfile, finalPrompt: prompt })
+    };
+  }
+
+  if (!safety.ok) {
+    return {
+      ok: false,
+      phase: "11-6",
+      provider: "lmstudio",
+      adapter_status: "LMSTUDIO_LIVE_BLOCKED_BY_SAFETY_GATE",
+      live_requested: true,
+      live_mode_enabled: liveConfig.live_mode_enabled,
+      safety,
+      model_profile: modelProfile,
+      request_preview
+    };
+  }
+
+  try {
+    const response = await callLmStudioLive({ modelProfile, finalPrompt: prompt });
+
+    return {
+      ok: true,
+      phase: "11-6",
+      provider: "lmstudio",
+      adapter_status: "LMSTUDIO_LIVE_CALL_COMPLETED",
+      live_requested: true,
+      live_mode_enabled: liveConfig.live_mode_enabled,
+      safety,
+      model_profile: modelProfile,
+      request_preview,
+      response
+    };
+  } catch (error) {
+    const normalizedError = normalizeLmStudioApiError(error);
+
+    return {
+      ...normalizedError,
+      live_mode_enabled: liveConfig.live_mode_enabled,
+      safety,
+      model_profile: modelProfile,
+      request_preview,
+      raw_error: error.raw || null
+    };
+  }
+}
+
 function normalizeGeminiApiError(error) {
   const message = error?.message || String(error || "Unknown Gemini error");
   const status = error?.status || error?.http_status || null;
@@ -1413,6 +1741,10 @@ async function testProviderAdapter({ provider = "mock", model_name = null, promp
     return testGeminiLiveProvider({ model_name: model_name || catalogItem.default_model, prompt, live });
   }
 
+  if (normalizedProvider === "lmstudio") {
+    return testLmStudioLiveProvider({ model_name: model_name || catalogItem.default_model, prompt, live });
+  }
+
   const modelProfile = normalizeModelProfile({
     model_code: `${normalizedProvider}_adapter_test`,
     provider: normalizedProvider,
@@ -1474,5 +1806,11 @@ module.exports = {
   testGeminiLiveProvider,
   listGeminiAvailableModels,
   normalizeGeminiApiError,
-  callGeminiLive
+  callGeminiLive,
+  getLmStudioLiveConfig,
+  getLmStudioLiveStatus,
+  assertLmStudioLiveSafety,
+  testLmStudioLiveProvider,
+  normalizeLmStudioApiError,
+  callLmStudioLive
 };

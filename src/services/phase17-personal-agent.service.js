@@ -81,6 +81,7 @@ function normalizeProvider(value) {
   if (['openai', 'gpt', 'chatgpt'].includes(v)) return 'openai';
   if (['anthropic', 'claude'].includes(v)) return 'anthropic';
   if (['google', 'gemini'].includes(v)) return 'google';
+  if (['lmstudio', 'lm-studio', 'lm studio'].includes(v)) return 'lmstudio';
   if (['mock', 'test', 'dry_run'].includes(v)) return 'mock';
   return v;
 }
