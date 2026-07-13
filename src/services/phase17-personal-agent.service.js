@@ -363,6 +363,71 @@ async function ensureTables(db) {
       [p.project_code, p.label, JSON.stringify(p.keywords)]
     );
   }
+
+  // Phase 6-1: fixed per-project guidelines that are always injected into the agent prompt,
+  // independent of whatever memory the keyword search happens to find. A project can have many
+  // guidelines (e.g. "매물 등록 규칙", "고객 응대 톤"), so this is not unique-per-project_code
+  // the way personal_agent_project_rules is.
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS project_guidelines (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      project_code VARCHAR(100) NOT NULL,
+      title VARCHAR(255) NULL,
+      content TEXT NOT NULL,
+      is_active TINYINT(1) DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_project_active (project_code, is_active)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+}
+
+// Phase 6-1: returns every active guideline for a project, merged into one text block so
+// callers (buildProviderPrompt) can drop it straight into the prompt as a single section.
+async function getActiveGuidelines(db, projectCode) {
+  if (!(await tableExists(db, 'project_guidelines'))) return '';
+  const [rows] = await db.query(
+    `SELECT title, content
+     FROM project_guidelines
+     WHERE project_code = ? AND is_active = 1
+     ORDER BY id ASC`,
+    [projectCode]
+  );
+  if (!rows.length) return '';
+  return rows.map((r) => (r.title ? `[${r.title}]\n${r.content}` : r.content)).join('\n\n');
+}
+
+async function addProjectGuideline(db, { project_code, title, content }) {
+  await ensureTables(db);
+  const projectCode = String(project_code || '').trim();
+  const guidelineContent = String(content || '').trim();
+  if (!projectCode) throw new Error('project_code is required');
+  if (!guidelineContent) throw new Error('content is required');
+
+  const [result] = await db.query(
+    `INSERT INTO project_guidelines (project_code, title, content, is_active)
+     VALUES (?, ?, ?, 1)`,
+    [projectCode, title ? String(title).trim() : null, guidelineContent]
+  );
+  return { id: result.insertId, project_code: projectCode, title: title || null, content: guidelineContent, is_active: 1 };
+}
+
+async function listProjectGuidelines(db, projectCode) {
+  await ensureTables(db);
+  const params = [];
+  let whereSql = '';
+  if (projectCode) {
+    whereSql = 'WHERE project_code = ?';
+    params.push(projectCode);
+  }
+  const [rows] = await db.query(
+    `SELECT id, project_code, title, content, is_active, created_at, updated_at
+     FROM project_guidelines
+     ${whereSql}
+     ORDER BY project_code ASC, id ASC`,
+    params
+  );
+  return rows;
 }
 
 async function getProjectRules(db) {
@@ -770,6 +835,10 @@ async function searchMemoryContext(db, projectCode, question, limit = 5) {
   const hasKeywordMatchedSource = trimmed.some(isReliableKeywordMatch);
   const matchType = trimmed.length === 0 ? 'none' : (hasKeywordMatchedSource ? 'keyword' : 'fallback');
 
+  // Phase 6-1: fixed project guidelines are unrelated to the keyword search above - they are
+  // always pulled in for the project, regardless of whether any memory matched this question.
+  const guidelinesText = await getActiveGuidelines(db, projectCode);
+
   return {
     project_code: projectCode,
     project_aliases: projectAliases,
@@ -781,6 +850,7 @@ async function searchMemoryContext(db, projectCode, question, limit = 5) {
     match_type: matchType,
     used_memory_count: trimmed.length,
     sources: trimmed,
+    guidelines_text: guidelinesText,
     context_summary: trimmed.map((s, i) => {
       const sourceLabel = s.source_ai || s.source_platform || '';
       const body = s.text || s.detail || '';
@@ -974,17 +1044,26 @@ function buildMockAnswer(question, projectCode, context) {
 }
 
 function buildProviderPrompt({ question, projectCode, context, detection }) {
+  // Guidelines are a fixed, always-applied section, distinct from the searched memory below -
+  // they don't depend on this question's keywords, so a project with none skips the section
+  // entirely rather than emitting an empty header.
+  const guidelinesSection = context?.guidelines_text
+    ? ['=== 프로젝트 지침 (항상 적용) ===', context.guidelines_text, '']
+    : [];
+
   return [
     'You are the user\'s Personal AI Gateway Agent.',
     'Answer in Korean unless the user explicitly asks for another language.',
     'Use the memory context below as the continuity source of truth.',
     'Do not claim that context exists if it is not shown.',
+    'If a "프로젝트 지침" section is present, always follow it - it takes priority over the searched memory context.',
     '',
     `Detected project_code: ${projectCode}`,
     `Detection reason: ${detection?.detection_reason || ''}`,
     `Loaded memory count: ${context?.used_memory_count || 0}`,
     '',
-    '## Memory Context',
+    ...guidelinesSection,
+    '=== 관련 참고 자료 ===',
     context?.context_summary || '(No relevant memory context was found.)',
     '',
     '## User Question',
@@ -1870,6 +1949,9 @@ module.exports = {
   ensureTables,
   getStatus,
   getProjectRules,
+  getActiveGuidelines,
+  addProjectGuideline,
+  listProjectGuidelines,
   detectProject,
   searchMemoryContext,
   executeProviderAnswer,
