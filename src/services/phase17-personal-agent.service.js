@@ -445,6 +445,53 @@ async function getProjectRules(db) {
   }));
 }
 
+const PROJECT_CODE_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+
+// Phase 6-3: lets a project be registered via API instead of editing DEFAULT_PROJECTS in code.
+// detectProject() already reads personal_agent_project_rules from the DB on every call (see
+// below), so a newly added row is picked up immediately with no restart required.
+async function addProjectRule(db, { project_code, label, keywords }) {
+  await ensureTables(db);
+  const projectCode = String(project_code || '').trim();
+  if (!PROJECT_CODE_PATTERN.test(projectCode)) {
+    throw new Error('project_code must contain only letters, digits, and underscores, and cannot start with a digit');
+  }
+
+  const [existing] = await db.query('SELECT id FROM personal_agent_project_rules WHERE project_code = ?', [projectCode]);
+  if (existing.length) {
+    throw new Error(`project_code "${projectCode}" already exists`);
+  }
+
+  const keywordList = Array.isArray(keywords) ? keywords.map((k) => String(k)) : [];
+  const [result] = await db.query(
+    `INSERT INTO personal_agent_project_rules (project_code, label, keywords, is_active)
+     VALUES (?, ?, ?, 1)`,
+    [projectCode, label ? String(label).trim() : projectCode, JSON.stringify(keywordList)]
+  );
+  return { id: result.insertId, project_code: projectCode, label: label ? String(label).trim() : projectCode, keywords: keywordList, is_active: 1 };
+}
+
+async function updateProjectRule(db, projectCode, { label, keywords }) {
+  await ensureTables(db);
+  const code = String(projectCode || '').trim();
+  const [existing] = await db.query(
+    'SELECT id, label, keywords FROM personal_agent_project_rules WHERE project_code = ?',
+    [code]
+  );
+  if (!existing.length) throw new Error(`project_code "${code}" not found`);
+
+  const nextLabel = label !== undefined ? String(label).trim() : existing[0].label;
+  const nextKeywords = Array.isArray(keywords)
+    ? keywords.map((k) => String(k))
+    : (() => { try { return JSON.parse(existing[0].keywords || '[]'); } catch (_) { return []; } })();
+
+  await db.query(
+    'UPDATE personal_agent_project_rules SET label = ?, keywords = ? WHERE project_code = ?',
+    [nextLabel, JSON.stringify(nextKeywords), code]
+  );
+  return { project_code: code, label: nextLabel, keywords: nextKeywords };
+}
+
 async function detectProject(db, question, requestedProjectCode = 'auto') {
   if (requestedProjectCode && requestedProjectCode !== 'auto') {
     return {
@@ -1949,6 +1996,8 @@ module.exports = {
   ensureTables,
   getStatus,
   getProjectRules,
+  addProjectRule,
+  updateProjectRule,
   getActiveGuidelines,
   addProjectGuideline,
   listProjectGuidelines,

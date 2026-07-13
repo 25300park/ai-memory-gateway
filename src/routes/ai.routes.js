@@ -22,6 +22,16 @@ router.get('/agent/projects', asyncHandler(async (req, res) => {
   res.json({ ok: true, projects: await personalAgent.getProjectRules(db) });
 }));
 
+router.post('/agent/projects', asyncHandler(async (req, res) => {
+  const project = await personalAgent.addProjectRule(db, req.body || {});
+  res.json({ ok: true, project });
+}));
+
+router.put('/agent/projects/:code', asyncHandler(async (req, res) => {
+  const project = await personalAgent.updateProjectRule(db, req.params.code, req.body || {});
+  res.json({ ok: true, project });
+}));
+
 router.post('/agent/guidelines', asyncHandler(async (req, res) => {
   const guideline = await personalAgent.addProjectGuideline(db, req.body || {});
   res.json({ ok: true, guideline });
