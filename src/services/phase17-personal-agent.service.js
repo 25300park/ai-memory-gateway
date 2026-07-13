@@ -41,8 +41,9 @@ try {
   githubTools = null;
 }
 
-// Phase 5-2: opt-in Anthropic tool-use (see payload.enable_crm_tool). Not wired into the
-// auto gateway decision yet - only used when a caller explicitly asks for it.
+// Phase 5-2/5-8: opt-in Anthropic tool-use. Under an explicit provider it's gated by
+// payload.enable_crm_tool; under provider=auto it's gated instead by the gateway's own
+// crm_query classification (see buildGatewayProviderDecision / executeProviderAnswer).
 const CRM_TOOLS = [
   {
     name: 'search_listings',
@@ -60,8 +61,11 @@ const CRM_TOOLS = [
   }
 ];
 
-// Phase 5-6: opt-in Anthropic tool-use (see payload.enable_github_tool). Read-only - returns
-// commit metadata (message/author/date/short sha) only, never diffs or file content.
+// Phase 5-6/5-8: opt-in Anthropic tool-use. Under an explicit provider it's gated by
+// payload.enable_github_tool; under provider=auto it's gated instead by the gateway's own
+// dev_activity classification (see buildGatewayProviderDecision / executeProviderAnswer).
+// Read-only - returns commit metadata (message/author/date/short sha) only, never diffs or file
+// content.
 const GITHUB_TOOLS = [
   {
     name: 'get_recent_commits',
@@ -786,13 +790,33 @@ async function searchMemoryContext(db, projectCode, question, limit = 5) {
 }
 
 
+// crm_query / dev_activity terms are matched with buildWordBoundaryPattern (same helper used by
+// scoreMemoryRow) instead of a bare substring regex, so short terms like "github" or "listing"
+// don't accidentally fire inside unrelated identifiers.
+const CRM_QUERY_TERMS = ['매물', '부동산', '임대', '매매', '시세', '중개', 'listing', 'property', 'bgc', '콘도'];
+const DEV_ACTIVITY_TERMS = ['커밋', '배포', '작업내역', '개발현황', 'github', '깃허브', 'repository'];
+const DEV_ACTIVITY_PHRASE_PATTERN = /최근.*작업/i;
+
+function matchesAnyBoundaryTerm(text, terms) {
+  return terms.some((term) => buildWordBoundaryPattern(term).test(text));
+}
+
 function inferGatewayQuestionType(question = '') {
   const q = String(question || '').toLowerCase();
   if (/(정상적인 결과|결과가 정상|agent answer|used_memory_count|provider decision|검색 결과|품질|진단)/i.test(q)) return 'agent_result_diagnosis';
   if (/(번역|translate|translation)/i.test(q)) return 'translation';
   if (/(gemini|제미니|google|구글)/i.test(q)) return 'google_context';
+  // dev_activity is checked before memory_summary: memory_summary's own keyword list includes
+  // bare "memory" (no word boundary), which would otherwise swallow repo-name mentions like
+  // "ai-memory-gateway에서 최근 작업 내역 알려줘" that are really asking for commit/activity
+  // history, not a memory recap. It's also checked before coding for the same reason - coding's
+  // keyword list includes bare "개발", which would otherwise swallow "개발현황"-style phrases.
+  if (matchesAnyBoundaryTerm(q, DEV_ACTIVITY_TERMS) || DEV_ACTIVITY_PHRASE_PATTERN.test(q)) return 'dev_activity';
   if (/(요약|정리|summarize|summary|간략|import|가져온|불러온|memory|기억|대화|클로드|claude|chatgpt|gemini)/i.test(q)) return 'memory_summary';
   if (/(patch|diff|code|coding|bug|error|api|route|server|npm|git|db|sql|코드|오류|버그|패치|서버|개발|수정)/i.test(q)) return 'coding';
+  // crm_query is checked after coding: a sentence like "매물 등록 코드 수정해줘" mentions a CRM
+  // term ("매물") but is really a code-edit request, so an explicit coding intent should win.
+  if (matchesAnyBoundaryTerm(q, CRM_QUERY_TERMS)) return 'crm_query';
   if (/(사업|전략|계획|투자|판단|분석|리스크|process|schedule|roadmap|strategy|plan|analyze)/i.test(q)) return 'strategy';
   return 'general';
 }
@@ -810,6 +834,8 @@ function buildGatewayProviderDecision({ question, requestedProvider, context, li
   let liveCallRecommended = true;
   let estimatedCostLevel = 'medium';
   let decisionReason = '일반 질문이므로 균형형 기본값인 OpenAI 계열을 우선 선택합니다.';
+  let autoEnableCrmTool = false;
+  let autoEnableGithubTool = false;
 
   if (memoryEnough) {
     selectedProvider = 'local';
@@ -822,6 +848,18 @@ function buildGatewayProviderDecision({ question, requestedProvider, context, li
     selectedModelFamily = 'Claude';
     estimatedCostLevel = 'medium';
     decisionReason = '코딩, 오류, 패치, 긴 코드 문맥 분석 요청이므로 Claude 계열을 우선 선택합니다.';
+  } else if (questionType === 'crm_query') {
+    selectedProvider = 'anthropic';
+    selectedModelFamily = 'Claude';
+    estimatedCostLevel = 'medium';
+    autoEnableCrmTool = true;
+    decisionReason = '부동산 관련 질문으로 판단되어 CRM 조회 도구를 자동 활성화합니다.';
+  } else if (questionType === 'dev_activity') {
+    selectedProvider = 'anthropic';
+    selectedModelFamily = 'Claude';
+    estimatedCostLevel = 'medium';
+    autoEnableGithubTool = true;
+    decisionReason = '개발 작업/커밋 이력 관련 질문으로 판단되어 GitHub 조회 도구를 자동 활성화합니다.';
   } else if (questionType === 'strategy') {
     selectedProvider = 'openai';
     selectedModelFamily = 'OpenAI';
@@ -871,6 +909,11 @@ function buildGatewayProviderDecision({ question, requestedProvider, context, li
     liveCallRecommended = normalizedProvider !== 'mock' && normalizedProvider !== 'local';
     estimatedCostLevel = normalizedProvider === 'mock' ? 'zero' : 'medium';
     decisionReason = `사용자가 provider=${normalizedProvider}를 직접 선택했으므로 자동 선택 대신 해당 provider를 사용합니다.`;
+    // Auto tool-enabling is a provider=auto-only behavior. When the caller pins a provider
+    // explicitly, tool access reverts to the existing manual enable_crm_tool/enable_github_tool
+    // checkboxes (see executeProviderAnswer) so there is no regression for that flow.
+    autoEnableCrmTool = false;
+    autoEnableGithubTool = false;
   }
 
   const liveCallAllowed = Boolean(liveRequested && liveCallRecommended && selectedProvider !== 'local' && selectedProvider !== 'mock');
@@ -887,7 +930,9 @@ function buildGatewayProviderDecision({ question, requestedProvider, context, li
     estimated_cost_level: estimatedCostLevel,
     memory_enough_for_local_answer: Boolean(memoryEnough || selectedProvider === 'local'),
     allow_fallback: allowFallback !== false,
-    decision_reason: decisionReason
+    decision_reason: decisionReason,
+    auto_enable_crm_tool: autoEnableCrmTool,
+    auto_enable_github_tool: autoEnableGithubTool
   };
 }
 
@@ -1028,10 +1073,9 @@ async function runAnthropicWithTools({ prompt, route, liveRequested, tools }) {
 
 async function executeProviderAnswer({ question, detected, context, payload }) {
   const requestedProvider = normalizeProvider(payload.provider || 'auto');
+  const isAutoProvider = requestedProvider === 'auto';
   const liveRequested = isTruthy(payload.live) || isTruthy(process.env.AI_AGENT_LIVE_MODE);
   const allowFallback = payload.allow_fallback !== false;
-  const enableCrmTool = isTruthy(payload.enable_crm_tool);
-  const enableGithubTool = isTruthy(payload.enable_github_tool);
   const intent = payload.intent || inferIntent(question);
   const gatewayDecision = buildGatewayProviderDecision({
     question,
@@ -1040,6 +1084,16 @@ async function executeProviderAnswer({ question, detected, context, payload }) {
     liveRequested,
     allowFallback
   });
+  // provider=auto: tool access is decided entirely by the gateway (auto_enable_crm_tool /
+  // auto_enable_github_tool from the question-type classification), ignoring whatever the
+  // caller passed in enable_crm_tool/enable_github_tool. provider=anthropic/openai/google/
+  // lmstudio (explicit): unchanged manual opt-in via those same payload flags. live=false never
+  // reaches a live call at all (see the live_call_allowed guard below), so this can't affect the
+  // free memory-only answer path.
+  const autoCrmTool = isAutoProvider && liveRequested && Boolean(gatewayDecision.auto_enable_crm_tool);
+  const autoGithubTool = isAutoProvider && liveRequested && Boolean(gatewayDecision.auto_enable_github_tool);
+  const enableCrmTool = isAutoProvider ? autoCrmTool : isTruthy(payload.enable_crm_tool);
+  const enableGithubTool = isAutoProvider ? autoGithubTool : isTruthy(payload.enable_github_tool);
   const prompt = payload.provider_prompt_override || buildProviderPrompt({
     question,
     projectCode: detected.detected_project_code,
@@ -1154,13 +1208,23 @@ async function executeProviderAnswer({ question, detected, context, payload }) {
     let toolAudit = null;
 
     const activeTools = [];
-    if (enableCrmTool && crmTools) activeTools.push(...CRM_TOOLS);
-    if (enableGithubTool && githubTools) activeTools.push(...GITHUB_TOOLS);
+    const toolTriggeredByName = {};
+    if (enableCrmTool && crmTools) {
+      activeTools.push(...CRM_TOOLS);
+      toolTriggeredByName.search_listings = autoCrmTool ? 'gateway_auto' : 'user_toggle';
+    }
+    if (enableGithubTool && githubTools) {
+      activeTools.push(...GITHUB_TOOLS);
+      toolTriggeredByName.get_recent_commits = autoGithubTool ? 'gateway_auto' : 'user_toggle';
+    }
 
     if (activeTools.length && route.selected_provider === 'anthropic') {
       const toolRun = await runAnthropicWithTools({ prompt, route, liveRequested, tools: activeTools });
       providerTest = toolRun.providerTest;
       toolAudit = toolRun.toolAudit;
+      if (toolAudit?.tool_used) {
+        toolAudit.triggered_by = toolTriggeredByName[toolAudit.tool_name] || 'user_toggle';
+      }
     } else {
       providerTest = await modelProvider.testProviderAdapter({
         provider: route.selected_provider,
