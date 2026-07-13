@@ -1,13 +1,16 @@
 'use strict';
 
 /**
- * Phase 6-4: propose/approve queue for write-side agent actions.
+ * Phase 6-4/6-5: propose/approve/execute queue for write-side agent actions.
  *
  * The agent never calls a write API (e.g. GitHub issue creation) directly.
  * Instead, tools like propose_github_issue insert a row here with
- * status='pending' and return a confirmation message to the user. Approving
- * a row only flips its status - no external system is touched in this phase.
+ * status='pending'. Approving a row only flips its status to 'approved' -
+ * the external system is only touched by the separate executeAction() call
+ * (Phase 6-5), which requires status='approved' as a precondition.
  */
+
+const githubTools = require('./github-tools.service');
 
 let tableReady = false;
 
@@ -159,11 +162,71 @@ async function rejectAction(db, id, { review_note } = {}) {
   return setActionStatus(db, id, 'rejected', { review_note });
 }
 
+function appendReviewNote(existingNote, line) {
+  return existingNote ? `${existingNote}\n${line}` : line;
+}
+
+// Phase 6-5: the only path that actually touches an external system (GitHub, for now).
+// Requires status='approved' - approving a row never triggers this on its own. On failure
+// the row is marked 'failed' with the error recorded in review_note instead of throwing,
+// mirroring the markQueueFailed pattern used by the summary worker (Phase 3).
+async function executeAction(db, id) {
+  await ensurePendingActionsTable(db);
+
+  const numericId = Number(id);
+  if (!Number.isInteger(numericId) || numericId <= 0) {
+    return { ok: false, http_status: 400, error: `Invalid action id "${id}".` };
+  }
+
+  const existing = await getPendingActionById(db, numericId);
+  if (!existing) {
+    return { ok: false, http_status: 404, error: `pending_actions row ${numericId} not found.` };
+  }
+
+  if (existing.status !== 'approved') {
+    return { ok: false, http_status: 400, error: '제안이 승인 상태가 아닙니다.' };
+  }
+
+  if (existing.action_type !== 'github_issue_create') {
+    return { ok: false, http_status: 400, error: `Unsupported action_type "${existing.action_type}" for execution.` };
+  }
+
+  const { repo, title, body, labels } = existing.payload || {};
+
+  try {
+    const result = await githubTools.createGithubIssue({ repo, title, body, labels });
+
+    await db.query(
+      `UPDATE pending_actions SET status = 'executed', review_note = ? WHERE id = ?`,
+      [appendReviewNote(existing.review_note, `[executed] issue_url=${result.issue_url}`), numericId]
+    );
+
+    return {
+      ok: true,
+      action: await getPendingActionById(db, numericId),
+      issue_number: result.issue_number,
+      issue_url: result.issue_url
+    };
+  } catch (error) {
+    await db.query(
+      `UPDATE pending_actions SET status = 'failed', review_note = ? WHERE id = ?`,
+      [appendReviewNote(existing.review_note, `[execute_failed] ${error.message}`), numericId]
+    );
+
+    return {
+      ok: false,
+      action: await getPendingActionById(db, numericId),
+      error: error.message
+    };
+  }
+}
+
 module.exports = {
   ensurePendingActionsTable,
   proposeAction,
   listPendingActions,
   getPendingActionById,
   approveAction,
-  rejectAction
+  rejectAction,
+  executeAction
 };

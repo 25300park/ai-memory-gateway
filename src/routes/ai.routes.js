@@ -141,6 +141,20 @@ router.post('/agent/actions/:id/reject', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
+router.post('/agent/actions/:id/execute', asyncHandler(async (req, res) => {
+  const result = await pendingActionsService.executeAction(db, req.params.id);
+  if (!result.ok && result.http_status) {
+    return sendStandardError(res, {
+      req,
+      code: result.http_status === 404 ? 'PENDING_ACTION_NOT_FOUND' : 'VALIDATION_ERROR',
+      message: result.error,
+      statusCode: result.http_status,
+      source: 'ai.routes:/agent/actions/:id/execute'
+    });
+  }
+  res.json(result);
+}));
+
 router.post('/agent/test', asyncHandler(async (req, res) => {
   res.json(await personalAgent.test(db, req.body || {}));
 }));
