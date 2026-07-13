@@ -418,6 +418,28 @@ async function ensureTables(db) {
       INDEX idx_project_active (project_code, is_active)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
+
+  // Phase 7-1: one row per writer/critic turn in a runWriterCriticLoop() run. round_no is
+  // shared between the writer and critic row of the same exchange - role distinguishes them.
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS collab_rounds (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      collab_session_id VARCHAR(180) NOT NULL,
+      project_code VARCHAR(100) NULL,
+      round_no INT NOT NULL,
+      role VARCHAR(20) NOT NULL,
+      provider_used VARCHAR(50) NULL,
+      content LONGTEXT NULL,
+      verdict VARCHAR(20) NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_collab_session (collab_session_id, round_no)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+  // Phase 7-2: optional reasoning/thinking trace behind the final content - LM Studio's
+  // reasoning-capable local models expose this as message.reasoning_content; Anthropic
+  // generally won't have one unless extended thinking is enabled. Nullable, so existing rows
+  // and providers without a reasoning trace are unaffected.
+  await ensureColumn(db, 'collab_rounds', 'reasoning_content', 'LONGTEXT NULL AFTER content');
 }
 
 // Phase 6-1: returns every active guideline for a project, merged into one text block so
@@ -1457,6 +1479,178 @@ async function executeProviderAnswer({ question, detected, context, payload, db,
   }
 }
 
+// -----------------------------------------------------------------------------
+// Phase 7-1: writer(anthropic) <-> critic(lmstudio) multi-round drafting loop.
+// callAnthropicLive() and callLmStudioLive() already share the same call shape
+// ({ modelProfile, finalPrompt, system_context_text }) and both return { answer, ... }
+// directly, so they're called straight rather than through testProviderAdapter -
+// that wrapper hard-caps max_output_tokens to 500 for its smoke-test screens, which
+// starves LM Studio's reasoning-heavy local model (it can burn 700+ tokens on
+// reasoning_content alone before writing the actual answer) and truncates the critic's
+// verdict to nothing.
+// -----------------------------------------------------------------------------
+
+function buildCriticPrompt({ draft }) {
+  return [
+    '당신은 신중하고 꼼꼼한 검토자입니다. 아래 문서를 검토해주세요.',
+    '문제가 없으면 응답을 정확히 "APPROVED"로 시작하세요.',
+    '문제가 있으면 응답을 정확히 "NEEDS_REVISION"으로 시작한 뒤, 구체적인 지적사항을 목록으로 나열하세요.',
+    '사소한 트집이 아니라 실제로 고쳐야 할 문제에만 집중하세요.',
+    '',
+    '=== 검토 대상 문서 ===',
+    draft
+  ].join('\n');
+}
+
+function buildWriterRevisionPrompt({ question, previousDraft, feedback }) {
+  return [
+    '당신은 문서 작성자입니다. 검토자의 피드백을 반영해서 문서를 다시 작성하세요.',
+    '설명이나 인사말 없이, 최종 문서 내용만 응답하세요.',
+    '',
+    '## 원래 요청',
+    question,
+    '',
+    '=== 이전 초안 ===',
+    previousDraft,
+    '',
+    '=== 검토자 피드백 ===',
+    feedback
+  ].join('\n');
+}
+
+function parseCriticVerdict(content) {
+  const normalized = String(content || '').trim().toUpperCase();
+  if (normalized.startsWith('APPROVED')) return 'approved';
+  if (normalized.startsWith('NEEDS_REVISION')) return 'needs_revision';
+  // The model didn't follow the exact-prefix instruction - fall back to a substring check
+  // on the first line, defaulting to needs_revision so an ambiguous reply never silently
+  // short-circuits the loop as if it had been approved.
+  const firstLine = normalized.split('\n')[0].slice(0, 50);
+  return firstLine.includes('APPROVED') ? 'approved' : 'needs_revision';
+}
+
+async function callCollabWriter(prompt) {
+  const liveConfig = modelProvider.getAnthropicLiveConfig();
+  const modelProfile = modelProvider.normalizeModelProfile({
+    model_code: 'collab_writer_anthropic',
+    provider: 'anthropic',
+    model_name: liveConfig.default_model,
+    display_name: 'Collab Writer (Anthropic)',
+    is_active: true
+  });
+  return modelProvider.callAnthropicLive({ modelProfile, finalPrompt: prompt });
+}
+
+async function callCollabCritic(prompt) {
+  const liveConfig = modelProvider.getLmStudioLiveConfig();
+  const modelProfile = modelProvider.normalizeModelProfile({
+    model_code: 'collab_critic_lmstudio',
+    provider: 'lmstudio',
+    model_name: liveConfig.default_model,
+    display_name: 'Collab Critic (LM Studio)',
+    is_active: true
+  });
+  return modelProvider.callLmStudioLive({ modelProfile, finalPrompt: prompt });
+}
+
+async function insertCollabRound(db, { collabSessionId, projectCode, roundNo, role, providerUsed, content, reasoningContent, verdict }) {
+  const [result] = await db.query(
+    `INSERT INTO collab_rounds (collab_session_id, project_code, round_no, role, provider_used, content, reasoning_content, verdict)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [collabSessionId, projectCode || null, roundNo, role, providerUsed || null, content || null, reasoningContent || null, verdict || null]
+  );
+
+  return {
+    id: Number(result.insertId),
+    collab_session_id: collabSessionId,
+    project_code: projectCode || null,
+    round_no: roundNo,
+    role,
+    provider_used: providerUsed || null,
+    content: content || null,
+    reasoning_content: reasoningContent || null,
+    verdict: verdict || null
+  };
+}
+
+async function runWriterCriticLoop(db, { question, projectCode, maxRounds = 3 } = {}) {
+  if (!modelProvider) throw new Error('model-provider.service is not available.');
+
+  await ensureTables(db);
+
+  const trimmedQuestion = String(question || '').trim();
+  if (!trimmedQuestion) throw new Error('question is required');
+
+  const resolvedMaxRounds = Math.max(1, Math.min(Number(maxRounds) || 3, 5));
+  const detected = await detectProject(db, trimmedQuestion, projectCode || 'auto');
+  const context = await searchMemoryContext(db, detected.detected_project_code, trimmedQuestion, 5);
+  const collabSessionId = `collab-${detected.detected_project_code}-${Date.now()}`;
+
+  const rounds = [];
+  let writerContent = null;
+  let criticContent = null;
+  let verdict = null;
+  let completedRounds = 0;
+
+  for (let roundNo = 1; roundNo <= resolvedMaxRounds; roundNo += 1) {
+    const writerPrompt = roundNo === 1
+      ? buildProviderPrompt({ question: trimmedQuestion, projectCode: detected.detected_project_code, context, detection: detected })
+      : buildWriterRevisionPrompt({ question: trimmedQuestion, previousDraft: writerContent, feedback: criticContent });
+
+    let writerResponse;
+    try {
+      writerResponse = await callCollabWriter(writerPrompt);
+    } catch (error) {
+      throw new Error(`Writer(anthropic) call failed at round ${roundNo}: ${error.message}`);
+    }
+    writerContent = extractProviderAnswer(writerResponse);
+    rounds.push(await insertCollabRound(db, {
+      collabSessionId,
+      projectCode: detected.detected_project_code,
+      roundNo,
+      role: 'writer',
+      providerUsed: writerResponse.provider || 'anthropic',
+      content: writerContent,
+      reasoningContent: typeof writerResponse.reasoning_content === 'string' ? writerResponse.reasoning_content : null,
+      verdict: null
+    }));
+
+    const criticPrompt = buildCriticPrompt({ draft: writerContent });
+    let criticResponse;
+    try {
+      criticResponse = await callCollabCritic(criticPrompt);
+    } catch (error) {
+      throw new Error(`Critic(lmstudio) call failed at round ${roundNo}: ${error.message}`);
+    }
+    criticContent = extractProviderAnswer(criticResponse);
+    verdict = parseCriticVerdict(criticContent);
+    rounds.push(await insertCollabRound(db, {
+      collabSessionId,
+      projectCode: detected.detected_project_code,
+      roundNo,
+      role: 'critic',
+      providerUsed: criticResponse.provider || 'lmstudio',
+      content: criticContent,
+      reasoningContent: typeof criticResponse.reasoning_content === 'string' ? criticResponse.reasoning_content : null,
+      verdict
+    }));
+
+    completedRounds = roundNo;
+    if (verdict === 'approved') break;
+  }
+
+  return {
+    ok: true,
+    collab_session_id: collabSessionId,
+    project_code: detected.detected_project_code,
+    detection: detected,
+    final_content: writerContent,
+    final_verdict: verdict,
+    total_rounds: completedRounds,
+    max_rounds: resolvedMaxRounds,
+    rounds
+  };
+}
 
 async function getRecentProjectInteractions(db, projectCode, limit = 5) {
   const safeLimit = Math.max(1, Math.min(Number(limit || 5), 20));
@@ -2057,6 +2251,7 @@ module.exports = {
   detectProject,
   searchMemoryContext,
   executeProviderAnswer,
+  runWriterCriticLoop,
   inferGatewayQuestionType,
   buildGatewayProviderDecision,
   saveAgentConversationLog,

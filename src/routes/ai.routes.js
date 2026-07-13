@@ -105,6 +105,42 @@ router.post('/agent/ask', asyncHandler(async (req, res) => {
 }));
 
 // -----------------------------------------------------------------------------
+// Phase 7-1: writer(anthropic) <-> critic(lmstudio) multi-round drafting loop.
+// Always makes real provider calls (that's the point of the endpoint), so
+// confirm_live: true is required to avoid triggering it by accident.
+// -----------------------------------------------------------------------------
+router.post('/agent/collab', asyncHandler(async (req, res) => {
+  const { question, project_code, max_rounds, confirm_live } = req.body || {};
+
+  if (confirm_live !== true) {
+    return sendStandardError(res, {
+      req,
+      code: 'VALIDATION_ERROR',
+      message: 'confirm_live must be true. This endpoint always makes real provider calls (writer=anthropic, critic=lmstudio).',
+      statusCode: 400,
+      source: 'ai.routes:/agent/collab'
+    });
+  }
+
+  try {
+    const result = await personalAgent.runWriterCriticLoop(db, {
+      question,
+      projectCode: project_code || 'auto',
+      maxRounds: max_rounds
+    });
+    res.json(result);
+  } catch (error) {
+    return sendStandardError(res, {
+      req,
+      code: 'COLLAB_LOOP_FAILED',
+      message: error.message,
+      statusCode: 502,
+      source: 'ai.routes:/agent/collab'
+    });
+  }
+}));
+
+// -----------------------------------------------------------------------------
 // Phase 6-4: propose/approve queue for write-side agent actions (no execution yet)
 // -----------------------------------------------------------------------------
 router.get('/agent/actions', asyncHandler(async (req, res) => {

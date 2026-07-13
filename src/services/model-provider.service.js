@@ -823,6 +823,20 @@ function extractAnthropicResponseText(response) {
   return parts.join("\n").trim();
 }
 
+// Only populated when extended thinking is enabled on the request (it isn't, currently) -
+// present for symmetry with extractLmStudioReasoningContent so callers that want a reasoning
+// trace can read it the same way regardless of which provider answered.
+function extractAnthropicReasoningContent(response) {
+  const content = Array.isArray(response?.content) ? response.content : [];
+  const parts = [];
+
+  for (const block of content) {
+    if (block?.type === "thinking" && typeof block?.thinking === "string") parts.push(block.thinking);
+  }
+
+  return parts.length ? parts.join("\n").trim() : null;
+}
+
 function normalizeAnthropicApiError(error) {
   const message = error?.message || String(error || "Unknown Anthropic error");
   const status = error?.status || error?.http_status || null;
@@ -917,6 +931,7 @@ async function callAnthropicLive({ modelProfile, finalPrompt, system_context_tex
     live_call: true,
     endpoint_used: "messages.create",
     answer,
+    reasoning_content: extractAnthropicReasoningContent(json),
     storedAssistantMessage: answer,
     raw_response_id: json?.id || null,
     usage: json?.usage || null,
@@ -1238,6 +1253,13 @@ function extractLmStudioResponseText(response) {
   return parts.join("\n").trim();
 }
 
+// Reasoning-capable local models (e.g. LM Studio's gemma reasoning builds) expose their
+// chain-of-thought as message.reasoning_content, separate from the final answer in .content.
+function extractLmStudioReasoningContent(response) {
+  const reasoning = response?.choices?.[0]?.message?.reasoning_content;
+  return typeof reasoning === "string" && reasoning.trim() ? reasoning : null;
+}
+
 function normalizeLmStudioApiError(error) {
   const message = error?.message || String(error || "Unknown LM Studio error");
   const status = error?.status || error?.http_status || null;
@@ -1319,6 +1341,7 @@ async function callLmStudioLive({ modelProfile, finalPrompt, system_context_text
     live_call: true,
     endpoint_used: "chat.completions.create",
     answer,
+    reasoning_content: extractLmStudioReasoningContent(json),
     storedAssistantMessage: answer,
     raw_response_id: json?.id || null,
     usage: json?.usage || null,
