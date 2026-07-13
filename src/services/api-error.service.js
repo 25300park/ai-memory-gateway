@@ -40,6 +40,14 @@ const ERROR_CATALOG = [
     operator_action: "Send confirm_action and confirm_text with the exact action key."
   },
   {
+    code: "PENDING_ACTION_NOT_FOUND",
+    http_status: 404,
+    type: "client_error",
+    severity: "low",
+    message: "The requested pending_actions row does not exist.",
+    operator_action: "Check the action id and retry."
+  },
+  {
     code: "ROUTE_NOT_FOUND",
     http_status: 404,
     type: "routing_error",

@@ -41,6 +41,14 @@ try {
   githubTools = null;
 }
 
+let pendingActionsService = null;
+
+try {
+  pendingActionsService = require('./pending-actions.service');
+} catch (error) {
+  pendingActionsService = null;
+}
+
 // Phase 5-2/5-8: opt-in Anthropic tool-use. Under an explicit provider it's gated by
 // payload.enable_crm_tool; under provider=auto it's gated instead by the gateway's own
 // crm_query classification (see buildGatewayProviderDecision / executeProviderAnswer).
@@ -81,10 +89,40 @@ const GITHUB_TOOLS = [
   }
 ];
 
-// Maps a tool_use block's `name` to the read-only handler that executes it.
+// Phase 6-4: opt-in write-proposal tool-use, gated by payload.enable_write_proposals
+// (explicit opt-in only, no gateway-auto path yet). Calling this tool never touches GitHub -
+// it only inserts a 'pending' row into pending_actions for a human to approve/reject later
+// via GET/POST /ai/agent/actions.
+const WRITE_PROPOSAL_TOOLS = [
+  {
+    name: 'propose_github_issue',
+    description: 'GitHub 이슈 생성을 제안합니다. 실제로 생성하지 않고 승인 대기 상태로 등록만 합니다.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        repo: { type: 'string', description: '이슈를 생성할 저장소 (예: ai-memory-gateway)' },
+        title: { type: 'string', description: '이슈 제목' },
+        body: { type: 'string', description: '이슈 본문' },
+        labels: { type: 'array', items: { type: 'string' }, description: '적용할 라벨 목록 (선택)' }
+      },
+      required: ['repo', 'title', 'body']
+    }
+  }
+];
+
+// Maps a tool_use block's `name` to the read-only handler that executes it. Handlers take
+// (input, toolContext) - toolContext is only populated/used by write-proposal tools that need
+// db/session identity; the read-only CRM/GitHub handlers ignore the second argument.
 const TOOL_HANDLERS = {
   search_listings: (input) => crmTools.searchListings(input || {}),
-  get_recent_commits: (input) => githubTools.getRecentCommits(input || {})
+  get_recent_commits: (input) => githubTools.getRecentCommits(input || {}),
+  propose_github_issue: (input, toolContext = {}) => pendingActionsService.proposeAction(toolContext.db, {
+    project_code: toolContext.projectCode,
+    agent_session_id: toolContext.agentSessionId,
+    action_type: 'github_issue_create',
+    payload: input || {},
+    proposed_by: 'gateway_auto'
+  })
 };
 
 const DEFAULT_PROJECTS = [
@@ -1137,7 +1175,7 @@ function extractProviderAnswer(providerTest) {
 // tools are opt-in for this request (payload.enable_crm_tool / payload.enable_github_tool).
 // Only called when the resolved provider is anthropic (see executeProviderAnswer). Not part
 // of the automatic gateway decision - this is an explicit opt-in per request.
-async function runAnthropicWithTools({ prompt, route, liveRequested, tools }) {
+async function runAnthropicWithTools({ prompt, route, liveRequested, tools, toolContext }) {
   const firstCall = await modelProvider.testProviderAdapter({
     provider: route.selected_provider,
     model_name: route.selected_model,
@@ -1163,7 +1201,7 @@ async function runAnthropicWithTools({ prompt, route, liveRequested, tools }) {
   try {
     const handler = TOOL_HANDLERS[toolUseBlock.name];
     if (!handler) throw new Error(`No handler registered for tool "${toolUseBlock.name}"`);
-    resultData = await handler(toolUseBlock.input);
+    resultData = await handler(toolUseBlock.input, toolContext || {});
   } catch (error) {
     toolError = error.message;
   }
@@ -1197,7 +1235,7 @@ async function runAnthropicWithTools({ prompt, route, liveRequested, tools }) {
   };
 }
 
-async function executeProviderAnswer({ question, detected, context, payload }) {
+async function executeProviderAnswer({ question, detected, context, payload, db, agentSessionId }) {
   const requestedProvider = normalizeProvider(payload.provider || 'auto');
   const isAutoProvider = requestedProvider === 'auto';
   const liveRequested = isTruthy(payload.live) || isTruthy(process.env.AI_AGENT_LIVE_MODE);
@@ -1220,6 +1258,9 @@ async function executeProviderAnswer({ question, detected, context, payload }) {
   const autoGithubTool = isAutoProvider && liveRequested && Boolean(gatewayDecision.auto_enable_github_tool);
   const enableCrmTool = isAutoProvider ? autoCrmTool : isTruthy(payload.enable_crm_tool);
   const enableGithubTool = isAutoProvider ? autoGithubTool : isTruthy(payload.enable_github_tool);
+  // Phase 6-4: explicit opt-in only, no gateway-auto path - propose_github_issue never fires
+  // unless the caller sets enable_write_proposals, regardless of provider=auto classification.
+  const enableWriteProposals = isTruthy(payload.enable_write_proposals);
   const prompt = payload.provider_prompt_override || buildProviderPrompt({
     question,
     projectCode: detected.detected_project_code,
@@ -1343,9 +1384,19 @@ async function executeProviderAnswer({ question, detected, context, payload }) {
       activeTools.push(...GITHUB_TOOLS);
       toolTriggeredByName.get_recent_commits = autoGithubTool ? 'gateway_auto' : 'user_toggle';
     }
+    if (enableWriteProposals && pendingActionsService) {
+      activeTools.push(...WRITE_PROPOSAL_TOOLS);
+      toolTriggeredByName.propose_github_issue = 'user_toggle';
+    }
 
     if (activeTools.length && route.selected_provider === 'anthropic') {
-      const toolRun = await runAnthropicWithTools({ prompt, route, liveRequested, tools: activeTools });
+      const toolRun = await runAnthropicWithTools({
+        prompt,
+        route,
+        liveRequested,
+        tools: activeTools,
+        toolContext: { db, projectCode: detected.detected_project_code, agentSessionId }
+      });
       providerTest = toolRun.providerTest;
       toolAudit = toolRun.toolAudit;
       if (toolAudit?.tool_used) {
@@ -1598,7 +1649,7 @@ async function ask(db, payload = {}) {
 
   let providerResult;
   try {
-    providerResult = await executeProviderAnswer({ question, detected, context, payload: { ...payload, provider: requestedProvider } });
+    providerResult = await executeProviderAnswer({ question, detected, context, payload: { ...payload, provider: requestedProvider }, db, agentSessionId });
   } catch (error) {
     // Provider call failed and allow_fallback was false, so executeProviderAnswer rethrew.
     // Record the failure (best-effort) before propagating the original error.
@@ -1765,6 +1816,8 @@ async function ask(db, payload = {}) {
     crm_tool_audit: providerResult.tool_audit?.tool_name === 'search_listings' ? providerResult.tool_audit : null,
     github_tool_used: Boolean(providerResult.tool_audit?.tool_used && providerResult.tool_audit?.tool_name === 'get_recent_commits'),
     github_tool_audit: providerResult.tool_audit?.tool_name === 'get_recent_commits' ? providerResult.tool_audit : null,
+    write_proposal_used: Boolean(providerResult.tool_audit?.tool_used && providerResult.tool_audit?.tool_name === 'propose_github_issue'),
+    write_proposal_audit: providerResult.tool_audit?.tool_name === 'propose_github_issue' ? providerResult.tool_audit : null,
     saved: true,
     storage: {
       save_status: finalSaveStatus,

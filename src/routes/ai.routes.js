@@ -9,6 +9,8 @@ const db = require('../config/db');
 const summaryQueueLinkService = require('../services/phase15-summary-queue-link.service');
 const importMemorySearchService = require('../services/phase15-import-memory-search.service');
 const geminiClaudeImporterService = require('../services/gemini-claude-importer.service');
+const pendingActionsService = require('../services/pending-actions.service');
+const { sendStandardError } = require('../services/api-error.service');
 
 function asyncHandler(fn) {
   return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -99,6 +101,43 @@ router.post('/agent/ask', asyncHandler(async (req, res) => {
     message: 'Personal AI Agent ask executed.',
     payload: { phase: result.phase, used_memory_count: result.used_memory_count, save_status: result.storage?.save_status }
   });
+  res.json(result);
+}));
+
+// -----------------------------------------------------------------------------
+// Phase 6-4: propose/approve queue for write-side agent actions (no execution yet)
+// -----------------------------------------------------------------------------
+router.get('/agent/actions', asyncHandler(async (req, res) => {
+  const result = await pendingActionsService.listPendingActions(db, {
+    project_code: req.query.project_code,
+    status: req.query.status
+  });
+  res.json(result);
+}));
+
+router.post('/agent/actions/:id/approve', asyncHandler(async (req, res) => {
+  const result = await pendingActionsService.approveAction(db, req.params.id, { review_note: req.body?.review_note });
+  if (!result.ok) {
+    return sendStandardError(res, {
+      req,
+      code: 'PENDING_ACTION_NOT_FOUND',
+      message: result.error,
+      source: 'ai.routes:/agent/actions/:id/approve'
+    });
+  }
+  res.json(result);
+}));
+
+router.post('/agent/actions/:id/reject', asyncHandler(async (req, res) => {
+  const result = await pendingActionsService.rejectAction(db, req.params.id, { review_note: req.body?.review_note });
+  if (!result.ok) {
+    return sendStandardError(res, {
+      req,
+      code: 'PENDING_ACTION_NOT_FOUND',
+      message: result.error,
+      source: 'ai.routes:/agent/actions/:id/reject'
+    });
+  }
   res.json(result);
 }));
 

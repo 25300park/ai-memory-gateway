@@ -10,13 +10,14 @@
  * on Windows).
  *
  * Usage:
- *   node scripts/test-ask.js "질문 내용" [provider] [live] [enable_crm_tool] [project_code] [enable_github_tool]
+ *   node scripts/test-ask.js "질문 내용" [provider] [live] [enable_crm_tool] [project_code] [enable_github_tool] [enable_write_proposals]
  *
  * Examples:
  *   node scripts/test-ask.js "안녕하세요"
  *   node scripts/test-ask.js "이 함수의 버그를 고쳐줘" anthropic true
  *   node scripts/test-ask.js "BGC 지역에 있는 매물 좀 찾아줘" anthropic true true rbs_homes
  *   node scripts/test-ask.js "ai-memory-gateway에서 최근에 어떤 작업을 했어?" anthropic true false rbs_homes true
+ *   node scripts/test-ask.js "필터 버튼 버그를 GitHub 이슈로 만들어줘" anthropic true false rbs_homes false true
  */
 
 const path = require('path');
@@ -28,9 +29,10 @@ const live = process.argv[4] === 'true';
 const enableCrmTool = process.argv[5] === 'true';
 const projectCode = process.argv[6];
 const enableGithubTool = process.argv[7] === 'true';
+const enableWriteProposals = process.argv[8] === 'true';
 
 if (!question) {
-  console.error('Usage: node scripts/test-ask.js "질문 내용" [provider] [live] [enable_crm_tool] [project_code] [enable_github_tool]');
+  console.error('Usage: node scripts/test-ask.js "질문 내용" [provider] [live] [enable_crm_tool] [project_code] [enable_github_tool] [enable_write_proposals]');
   process.exit(1);
 }
 
@@ -50,7 +52,8 @@ async function main() {
       live,
       enable_crm_tool: enableCrmTool,
       project_code: projectCode,
-      enable_github_tool: enableGithubTool
+      enable_github_tool: enableGithubTool,
+      enable_write_proposals: enableWriteProposals
     })
   });
 
@@ -66,6 +69,8 @@ async function main() {
   console.log('crm_tool_audit:', JSON.stringify(body.crm_tool_audit));
   console.log('github_tool_used:', body.github_tool_used);
   console.log('github_tool_audit:', JSON.stringify(body.github_tool_audit));
+  console.log('write_proposal_used:', body.write_proposal_used);
+  console.log('write_proposal_audit:', JSON.stringify(body.write_proposal_audit));
   console.log('answer:', body.answer);
   console.log('');
   console.log('--- full response ---');
