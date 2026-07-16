@@ -1529,6 +1529,14 @@ function parseCriticVerdict(content) {
   return firstLine.includes('APPROVED') ? 'approved' : 'needs_revision';
 }
 
+// Structured multi-section documents (headers, tables, checklists) routinely exceed the
+// shared ANTHROPIC_MAX_OUTPUT_TOKENS/LMSTUDIO_MAX_OUTPUT_TOKENS budget (1500 by default,
+// sized for normal chat answers), which was silently truncating writer drafts and critic
+// verdicts mid-sentence. These give the collab loop its own, larger budget without touching
+// the shared env values other callers (e.g. /agent/ask) rely on.
+const COLLAB_WRITER_MAX_OUTPUT_TOKENS = Number(process.env.COLLAB_WRITER_MAX_OUTPUT_TOKENS) || 4000;
+const COLLAB_CRITIC_MAX_OUTPUT_TOKENS = Number(process.env.COLLAB_CRITIC_MAX_OUTPUT_TOKENS) || 2000;
+
 async function callCollabWriter(prompt) {
   const liveConfig = modelProvider.getAnthropicLiveConfig();
   const modelProfile = modelProvider.normalizeModelProfile({
@@ -1536,9 +1544,14 @@ async function callCollabWriter(prompt) {
     provider: 'anthropic',
     model_name: liveConfig.default_model,
     display_name: 'Collab Writer (Anthropic)',
+    max_output_tokens: COLLAB_WRITER_MAX_OUTPUT_TOKENS,
     is_active: true
   });
-  return modelProvider.callAnthropicLive({ modelProfile, finalPrompt: prompt });
+  return modelProvider.callAnthropicLive({
+    modelProfile,
+    finalPrompt: prompt,
+    max_output_tokens_override: COLLAB_WRITER_MAX_OUTPUT_TOKENS
+  });
 }
 
 async function callCollabCritic(prompt) {
@@ -1548,9 +1561,14 @@ async function callCollabCritic(prompt) {
     provider: 'lmstudio',
     model_name: liveConfig.default_model,
     display_name: 'Collab Critic (LM Studio)',
+    max_output_tokens: COLLAB_CRITIC_MAX_OUTPUT_TOKENS,
     is_active: true
   });
-  return modelProvider.callLmStudioLive({ modelProfile, finalPrompt: prompt });
+  return modelProvider.callLmStudioLive({
+    modelProfile,
+    finalPrompt: prompt,
+    max_output_tokens_override: COLLAB_CRITIC_MAX_OUTPUT_TOKENS
+  });
 }
 
 async function insertCollabRound(db, { collabSessionId, projectCode, roundNo, role, providerUsed, content, reasoningContent, verdict }) {

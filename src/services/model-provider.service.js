@@ -870,7 +870,7 @@ function normalizeAnthropicApiError(error) {
   };
 }
 
-async function callAnthropicLive({ modelProfile, finalPrompt, system_context_text = "", tools = null, messages_override = null }) {
+async function callAnthropicLive({ modelProfile, finalPrompt, system_context_text = "", tools = null, messages_override = null, max_output_tokens_override = null }) {
   const normalized = normalizeModelProfile(modelProfile);
   const safety = assertAnthropicLiveSafety({ modelProfile: normalized, finalPrompt });
 
@@ -882,9 +882,14 @@ async function callAnthropicLive({ modelProfile, finalPrompt, system_context_tex
 
   const liveConfig = getAnthropicLiveConfig();
   const requestPreview = buildProviderRequestPreview({ modelProfile: normalized, finalPrompt, system_context_text });
+  // The output-token cap is normally the shared ANTHROPIC_MAX_OUTPUT_TOKENS env value
+  // (liveConfig.max_output_tokens) - callers with a genuinely larger budget need (e.g. the
+  // collab writer) can pass max_output_tokens_override to raise the cap for just that call,
+  // without affecting /agent/ask or any other caller that doesn't pass it.
+  const outputTokenCap = max_output_tokens_override || liveConfig.max_output_tokens;
   const payload = {
     model: normalized.model_name,
-    max_tokens: Math.min(normalized.max_output_tokens || liveConfig.max_output_tokens, liveConfig.max_output_tokens),
+    max_tokens: Math.min(normalized.max_output_tokens || outputTokenCap, outputTokenCap),
     system: requestPreview.system || system_context_text || "You are a context-aware business assistant connected to AI Memory Gateway.",
     messages: messages_override || (requestPreview.messages && requestPreview.messages.length
       ? requestPreview.messages
@@ -1290,7 +1295,7 @@ function normalizeLmStudioApiError(error) {
   };
 }
 
-async function callLmStudioLive({ modelProfile, finalPrompt, system_context_text = "" }) {
+async function callLmStudioLive({ modelProfile, finalPrompt, system_context_text = "", max_output_tokens_override = null }) {
   const normalized = normalizeModelProfile(modelProfile);
   const safety = assertLmStudioLiveSafety({ modelProfile: normalized, finalPrompt });
 
@@ -1303,10 +1308,13 @@ async function callLmStudioLive({ modelProfile, finalPrompt, system_context_text
   const liveConfig = getLmStudioLiveConfig();
   const requestPreview = buildProviderRequestPreview({ modelProfile: normalized, finalPrompt, system_context_text });
   const endpoint = `${String(liveConfig.endpoint || "http://localhost:1234/v1").replace(/\/$/, "")}/chat/completions`;
+  // See callAnthropicLive's outputTokenCap comment - same override mechanism here so the
+  // collab critic can be given a different budget than the shared LMSTUDIO_MAX_OUTPUT_TOKENS.
+  const outputTokenCap = max_output_tokens_override || liveConfig.max_output_tokens;
   const payload = {
     model: requestPreview.model,
     messages: requestPreview.messages,
-    max_tokens: Math.min(normalized.max_output_tokens || liveConfig.max_output_tokens, liveConfig.max_output_tokens)
+    max_tokens: Math.min(normalized.max_output_tokens || outputTokenCap, outputTokenCap)
   };
 
   if (liveConfig.send_temperature) {
