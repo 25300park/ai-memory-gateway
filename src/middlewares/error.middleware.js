@@ -1,4 +1,5 @@
 const { fail } = require("../utils/response.util");
+const { isDbConnectionError, buildDbConnectionErrorMessage } = require("../utils/db-error-hint.util");
 
 function notFoundHandler(req, res, next) {
   return fail(res, {
@@ -23,9 +24,15 @@ function errorHandler(error, req, res, next) {
     stack: error.stack
   });
 
+  // Keep code/statusCode exactly as before - only the message gets a human-readable hint
+  // prepended, so existing consumers that branch on error.code/http_status see no change.
+  const message = isDbConnectionError(error)
+    ? buildDbConnectionErrorMessage(error)
+    : (error.message || "An unexpected error occurred.");
+
   return fail(res, {
     code: error.code || "INTERNAL_ERROR",
-    message: error.message || "An unexpected error occurred.",
+    message,
     statusCode: error.statusCode || 500,
     details: {
       request_id: req.requestId || null,

@@ -11,10 +11,28 @@ const importMemorySearchService = require('../services/phase15-import-memory-sea
 const geminiClaudeImporterService = require('../services/gemini-claude-importer.service');
 const pendingActionsService = require('../services/pending-actions.service');
 const { sendStandardError } = require('../services/api-error.service');
+const { isDbConnectionError, buildDbConnectionErrorMessage } = require('../utils/db-error-hint.util');
 
 function asyncHandler(fn) {
   return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 }
+
+// -----------------------------------------------------------------------------
+// Phase 9-1: lightweight DB health check for the console's connection-error banner.
+// Always resolves (never throws to the global error handler) so the console can render
+// a clear "DB unreachable" state instead of a bare fetch failure or infinite spinner.
+// -----------------------------------------------------------------------------
+router.get('/health/db', asyncHandler(async (req, res) => {
+  const startedAt = Date.now();
+
+  try {
+    await db.query('SELECT 1');
+    res.json({ ok: true, latency_ms: Date.now() - startedAt, error: null });
+  } catch (error) {
+    const message = isDbConnectionError(error) ? buildDbConnectionErrorMessage(error) : error.message;
+    res.status(500).json({ ok: false, latency_ms: Date.now() - startedAt, error: message });
+  }
+}));
 
 router.get('/agent/status', asyncHandler(async (req, res) => {
   res.json(await personalAgent.getStatus(db));
