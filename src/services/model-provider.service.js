@@ -1295,6 +1295,8 @@ function normalizeLmStudioApiError(error) {
   };
 }
 
+const LMSTUDIO_MIN_ANSWER_LENGTH = 20;
+
 async function callLmStudioLive({ modelProfile, finalPrompt, system_context_text = "", max_output_tokens_override = null }) {
   const normalized = normalizeModelProfile(modelProfile);
   const safety = assertLmStudioLiveSafety({ modelProfile: normalized, finalPrompt });
@@ -1446,7 +1448,31 @@ async function testLmStudioLiveProvider({ model_name = null, prompt = "Phase 11-
   }
 
   try {
-    const response = await callLmStudioLive({ modelProfile, finalPrompt: prompt });
+    let response = await callLmStudioLive({ modelProfile, finalPrompt: prompt });
+
+    // Phase 10 eval turned up cases where LM Studio (a small local model) returns an
+    // empty or truncated answer with no error at all - testProviderAdapter/executeProviderAnswer
+    // has no way to tell that apart from a real, complete answer. One automatic retry gives
+    // the local model a second chance; if it's still empty/too short, this is reported
+    // honestly via lmstudio_retry_exhausted rather than passed off as a normal success.
+    // Only applies to this executeProviderAnswer path - callCollabCritic calls
+    // callLmStudioLive() directly and never goes through testLmStudioLiveProvider.
+    const isTooShort = (text) => !text || String(text).trim().length < LMSTUDIO_MIN_ANSWER_LENGTH;
+    let lmstudioRetried = false;
+    let lmstudioRetryExhausted = false;
+
+    if (isTooShort(response.answer)) {
+      lmstudioRetried = true;
+      const retryResponse = await callLmStudioLive({ modelProfile, finalPrompt: prompt });
+      if (!isTooShort(retryResponse.answer)) {
+        response = retryResponse;
+      } else {
+        // Retry didn't help either - keep whichever attempt has more content, but be
+        // honest that neither attempt actually succeeded.
+        response = (retryResponse.answer || "").length > (response.answer || "").length ? retryResponse : response;
+        lmstudioRetryExhausted = true;
+      }
+    }
 
     return {
       ok: true,
@@ -1458,7 +1484,9 @@ async function testLmStudioLiveProvider({ model_name = null, prompt = "Phase 11-
       safety,
       model_profile: modelProfile,
       request_preview,
-      response
+      response,
+      lmstudio_retried: lmstudioRetried,
+      lmstudio_retry_exhausted: lmstudioRetryExhausted
     };
   } catch (error) {
     const normalizedError = normalizeLmStudioApiError(error);

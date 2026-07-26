@@ -2030,6 +2030,11 @@ async function ask(db, payload = {}) {
     provider_model: providerResult.provider_model,
     provider_live_requested: providerResult.live_requested,
     provider_fallback_used: providerResult.fallback_used,
+    // Surfaced separately from provider_fallback_used: this is LM Studio returning an empty/
+    // too-short answer with no error at all (see testLmStudioLiveProvider's retry-once logic),
+    // not a route/execution failure - callers need to tell the two apart.
+    lmstudio_retried: providerResult.provider_response?.lmstudio_retried ?? false,
+    lmstudio_retry_exhausted: providerResult.provider_response?.lmstudio_retry_exhausted ?? false,
     provider_route_status: providerResult.provider_route?.route_status || null,
     gateway_decision: providerResult.gateway_decision || providerResult.provider_route?.gateway_decision || null,
     question_type: providerResult.gateway_decision?.question_type || null,

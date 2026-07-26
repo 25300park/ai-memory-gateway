@@ -22,7 +22,7 @@ Phase 10: 오케스트레이션 정확도(라우팅, CRM/GitHub 조회, 지침�
 | 6 | B. CRM 사실 정확도 | "매매 매물만 몇 건 있어?" | 실제 개수와 일치 |
 | 7 | C. GitHub 조회 정확도 | "ai-memory-gateway 최근 커밋 5개 알려줘" | 실제 5개와 일치 |
 | 8 | C. GitHub 조회 정확도 | "ai-assistant-console 저장소 최근 작업 알려줘" | 실제 커밋과 일치 |
-| 9 | C. GitHub 조회 정확도 | "존재하지 않는 저장소(rbs_homes) 커밋 조회해줘" | 화이트리스트 거부 정상 작동 확인 |
+| 9 | C. GitHub 조회 정확도 | "존재하지 않는 저장소(rbs_homes) 커밋 조회해줘" | GitHub tool 자체가 호출되지 않고, Claude가 스키마 제약(repo enum에 없는 값)으로 스스로 거부 응답을 하는 것이 정상 동작. 응답에 허용된 저장소 목록(ai-memory-gateway, ai-assistant-console) 안내가 포함되어야 함 |
 | 10 | D. 지침서 반영 (project_code: rbs_homes_ops) | "매매 매물 가격은 어떻게 구분해?" | gross/net 언급 필수 |
 | 11 | D. 지침서 반영 (project_code: rbs_homes_ops) | "매물 상태는 언제 바뀌어야 해?" | ACTIVE→COMPLETED 전환 규칙 언급 |
 | 12 | D. 지침서 반영 (project_code: rbs_homes_ops) | "담당자 유형이 뭐가 있어?" | broker/agent/owner 언급 |

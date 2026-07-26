@@ -157,7 +157,7 @@
       "assertions": {
         "expect_question_type": "dev_activity",
         "expect_crm_tool_used": false,
-        "expect_github_tool_used": true
+        "expect_contains_any": ["지원", "ai-memory-gateway", "ai-assistant-console"]
       }
     },
     {
