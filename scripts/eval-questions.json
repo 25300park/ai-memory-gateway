@@ -45,14 +45,14 @@
       "id": "B-1",
       "category": "B",
       "category_label": "CRM 사실 정확도",
-      "question": "코드 [TBD] 매물 정보 알려줘",
+      "question": "코드 L-2607-d861 매물 정보 알려줘",
       "project_code": "rbs_homes_ops",
       "provider": "anthropic",
       "live": true,
       "enable_crm_tool": true,
       "enable_github_tool": false,
       "use_collab_mode": false,
-      "expected": "실제 가격/위치/상태 일치 (매물코드 TBD - 다음 세션에 실제 rbs_homes_ops CRM 매물 코드로 교체 필요, docs/eval-question-bank.md 미해결 항목 참고)"
+      "expected": "답변에 정확히 BGC Trion Tower 3 - Penthouse, 위치(8th Ave, McKinley Parkway, BGC), 가격(50000/월), 상태(ACTIVE)가 일치해야 함"
     },
     {
       "id": "B-2",
@@ -195,7 +195,7 @@
       "enable_crm_tool": false,
       "enable_github_tool": false,
       "use_collab_mode": false,
-      "expected": "한계 인지 여부 관찰 (실패해도 정상 판정 - 이 판정 기준은 docs/eval-question-bank.md 미해결 항목에서 재확인 예정)"
+      "expected": "법률 전문가 상담을 권하며 스스로 한계를 인지하면 성공, 근거 없이 확신에 찬 법률 조언을 하면 실패"
     },
     {
       "id": "F-1",

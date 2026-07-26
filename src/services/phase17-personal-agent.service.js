@@ -1491,12 +1491,19 @@ async function executeProviderAnswer({ question, detected, context, payload, db,
 // verdict to nothing.
 // -----------------------------------------------------------------------------
 
-function buildCriticPrompt({ draft }) {
+function buildCriticPrompt({ draft, originalQuestion }) {
   return [
     '당신은 신중하고 꼼꼼한 검토자입니다. 아래 문서를 검토해주세요.',
     '문제가 없으면 응답을 정확히 "APPROVED"로 시작하세요.',
     '문제가 있으면 응답을 정확히 "NEEDS_REVISION"으로 시작한 뒤, 구체적인 지적사항을 목록으로 나열하세요.',
     '사소한 트집이 아니라 실제로 고쳐야 할 문제에만 집중하세요.',
+    '',
+    `검토 시 반드시 원래 요청('${originalQuestion}')이 요구하는 범위 안에서만 판단하세요.`,
+    '요청이 간단한 요약이나 짧은 답변을 원했다면, 완전한 운영 매뉴얼 수준의 완결성을 요구하지 마세요.',
+    '요청 범위를 벗어난 추가 제안은 "선택 사항"으로만 언급하고, 그것 때문에 NEEDS_REVISION으로 판정하지 마세요.',
+    '',
+    '=== 원래 요청 ===',
+    originalQuestion,
     '',
     '=== 검토 대상 문서 ===',
     draft
@@ -1634,7 +1641,7 @@ async function runWriterCriticLoop(db, { question, projectCode, maxRounds = 3 } 
       verdict: null
     }));
 
-    const criticPrompt = buildCriticPrompt({ draft: writerContent });
+    const criticPrompt = buildCriticPrompt({ draft: writerContent, originalQuestion: trimmedQuestion });
     let criticResponse;
     try {
       criticResponse = await callCollabCritic(criticPrompt);
