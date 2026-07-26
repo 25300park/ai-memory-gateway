@@ -55,7 +55,7 @@ try {
 const CRM_TOOLS = [
   {
     name: 'search_listings',
-    description: 'RBS-HOMES CRM에 등록된 매물을 검색합니다. 이름/주소 키워드 검색 또는 정확한 코드 조회 가능하며, 거래유형(RENT/SALE), 가격 범위로 필터링할 수 있습니다.',
+    description: 'RBS-HOMES CRM에 등록된 매물을 검색합니다. 이름/주소 키워드 검색 또는 정확한 코드 조회 가능하며, 거래유형(RENT/SALE), 가격 범위로 필터링할 수 있습니다. 응답의 total_matching_count는 조건에 맞는 전체 매물 개수이고, listings 배열은 그중 최대 20개만 보여준 목록입니다. 개수를 답할 때는 반드시 total_matching_count를 사용하고, listings.length를 전체 개수로 착각하지 마세요.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1245,13 +1245,25 @@ async function runAnthropicWithTools({ prompt, route, liveRequested, tools, tool
     messages_override: followupMessages
   });
 
+  // Most tools return a bare array (tool_result_count = "how many rows this
+  // call returned"). search_listings instead returns { listings,
+  // total_matching_count, returned_count } so Claude can tell a limit-capped
+  // list apart from the true match count - detect that shape generically
+  // (not tied to one tool name) rather than assuming every tool is an array.
+  const hasListingsShape = resultData && typeof resultData === 'object' && Array.isArray(resultData.listings);
+  const toolResultCount = Array.isArray(resultData)
+    ? resultData.length
+    : (hasListingsShape ? resultData.listings.length : null);
+  const totalMatchingCount = hasListingsShape ? resultData.total_matching_count : null;
+
   return {
     providerTest: secondCall,
     toolAudit: {
       tool_used: true,
       tool_name: toolUseBlock.name,
       tool_input: toolUseBlock.input,
-      tool_result_count: Array.isArray(resultData) ? resultData.length : null,
+      tool_result_count: toolResultCount,
+      total_matching_count: totalMatchingCount,
       tool_result: resultData,
       tool_error: toolError
     }

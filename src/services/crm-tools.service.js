@@ -55,7 +55,8 @@ async function searchListings({ keyword, code, transaction_type, min_price, max_
   params.push(safeLimit);
 
   const sql = `
-    SELECT id, code, name, address, transaction_type, property_type, price, status
+    SELECT id, code, name, address, transaction_type, property_type, price, status,
+           COUNT(*) OVER() AS total_matching_count
     FROM ai_agent_listings_view
     ${whereSql}
     ORDER BY code DESC
@@ -64,7 +65,14 @@ async function searchListings({ keyword, code, transaction_type, min_price, max_
 
   const client = getPool();
   const result = await client.query(sql, params);
-  return result.rows;
+  const totalMatchingCount = result.rows.length > 0 ? Number(result.rows[0].total_matching_count) : 0;
+  const listings = result.rows.map(({ total_matching_count, ...row }) => row);
+
+  return {
+    listings,
+    total_matching_count: totalMatchingCount,
+    returned_count: listings.length
+  };
 }
 
 module.exports = { searchListings };
