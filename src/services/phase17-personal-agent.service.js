@@ -1,5 +1,7 @@
 'use strict';
 
+const { detectEncodingCorruption } = require('../utils/encoding-corruption.util');
+
 /**
  * Phase 17 Personal Agent Service
  * Phase 17-6: Continue Project Feature
@@ -1919,6 +1921,24 @@ async function ask(db, payload = {}) {
   const interactionStatus = hadProviderError ? 'fallback_on_error' : 'ok';
   const interactionErrorMessage = hadProviderError ? providerResult.error_message : null;
   const answerSummary = summarizeAnswer(providerResult.answer);
+
+  // Storage-time guard only - never blocks the save, just surfaces mojibake/encoding
+  // corruption (a high ratio of U+FFFD replacement characters) in the server log so it
+  // can be traced back to whatever upstream step mangled the charset.
+  const questionCorruption = detectEncodingCorruption(question);
+  if (questionCorruption.corrupted) {
+    console.warn(
+      `[encoding-corruption] user_question looks corrupted (agent_session_id=${agentSessionId}): ` +
+      `${questionCorruption.replacement_char_count} U+FFFD chars, ratio=${questionCorruption.ratio.toFixed(3)}`
+    );
+  }
+  const answerCorruption = detectEncodingCorruption(providerResult.answer);
+  if (answerCorruption.corrupted) {
+    console.warn(
+      `[encoding-corruption] answer looks corrupted (agent_session_id=${agentSessionId}): ` +
+      `${answerCorruption.replacement_char_count} U+FFFD chars, ratio=${answerCorruption.ratio.toFixed(3)}`
+    );
+  }
 
   let agentTurnNo = await getNextAgentTurnNo(db, agentSessionId);
   let result;
