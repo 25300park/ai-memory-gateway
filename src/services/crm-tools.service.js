@@ -21,10 +21,15 @@ function getPool() {
   return pool;
 }
 
-async function searchListings({ keyword, transaction_type, min_price, max_price, limit } = {}) {
+async function searchListings({ keyword, code, transaction_type, min_price, max_price, limit } = {}) {
   const safeLimit = Math.max(1, Math.min(Number(limit) || 5, 20));
   const conditions = [];
   const params = [];
+
+  if (code) {
+    params.push(code);
+    conditions.push(`code = $${params.length}`);
+  }
 
   if (keyword) {
     params.push(`%${keyword}%`);

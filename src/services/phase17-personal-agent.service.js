@@ -55,11 +55,12 @@ try {
 const CRM_TOOLS = [
   {
     name: 'search_listings',
-    description: 'RBS-HOMES CRM에 등록된 매물을 검색합니다. 건물명/주소 키워드, 거래유형(RENT/SALE), 가격 범위로 필터링할 수 있습니다.',
+    description: 'RBS-HOMES CRM에 등록된 매물을 검색합니다. 이름/주소 키워드 검색 또는 정확한 코드 조회 가능하며, 거래유형(RENT/SALE), 가격 범위로 필터링할 수 있습니다.',
     input_schema: {
       type: 'object',
       properties: {
         keyword: { type: 'string', description: '건물명 또는 주소에 포함된 검색어 (예: BGC, Maridien)' },
+        code: { type: 'string', description: '정확한 매물 코드로 조회할 때 사용, 예: L-2607-d861' },
         transaction_type: { type: 'string', enum: ['RENT', 'SALE'], description: '거래 유형' },
         min_price: { type: 'number', description: '최소 가격' },
         max_price: { type: 'number', description: '최대 가격' }
