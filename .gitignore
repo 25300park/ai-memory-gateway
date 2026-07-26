@@ -37,6 +37,9 @@ tmp/
 temp/
 cache/
 
+# Eval runner output (contains real conversation content)
+results/
+
 # IDE
 .vscode/*
 !.vscode/extensions.json
