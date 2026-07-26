@@ -3,8 +3,13 @@
 /**
  * Phase 10-5: runs the full eval pipeline in order - run-eval.js (all 21
  * questions) -> score-eval.js (grades the run just produced) ->
- * report-eval.js (builds the comparison report) - intended to be triggered
- * weekly by Windows Task Scheduler.
+ * report-eval.js (builds the comparison report) - triggered on a schedule
+ * via Windows Task Scheduler.
+ *
+ * Note: this script is actually scheduled to run once a month, not weekly -
+ * the file name reflects the original design-time name and was kept as-is;
+ * the real cadence is whatever Task Scheduler is configured with, not
+ * anything in this file.
  *
  * Before doing anything, it checks that the API server is actually up.
  * Phase 9 already hit a case where the mini PC/NAS was unreachable and the
@@ -70,7 +75,7 @@ function findLatestResultsFile() {
 
 async function main() {
   const startedAt = Date.now();
-  console.log(`Weekly eval pipeline starting at ${timestamp()}`);
+  console.log(`Scheduled eval pipeline starting at ${timestamp()}`);
   console.log(`Checking API server health at ${baseUrl}/health ...`);
 
   const healthy = await checkServerHealth();
