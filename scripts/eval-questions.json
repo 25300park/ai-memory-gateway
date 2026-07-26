@@ -13,7 +13,12 @@
       "enable_crm_tool": false,
       "enable_github_tool": false,
       "use_collab_mode": false,
-      "expected": "question_type=crm_query, CRM tool 발동 기대 (provider=auto이므로 게이트웨이가 자동으로 CRM tool을 활성화해야 함)"
+      "expected": "question_type=crm_query, CRM tool 발동 기대 (provider=auto이므로 게이트웨이가 자동으로 CRM tool을 활성화해야 함)",
+      "assertions": {
+        "expect_question_type": "crm_query",
+        "expect_crm_tool_used": true,
+        "expect_github_tool_used": false
+      }
     },
     {
       "id": "A-2",
@@ -26,7 +31,12 @@
       "enable_crm_tool": false,
       "enable_github_tool": false,
       "use_collab_mode": false,
-      "expected": "question_type=dev_activity, GitHub tool 발동 기대 (provider=auto 게이트웨이 자동 활성화)"
+      "expected": "question_type=dev_activity, GitHub tool 발동 기대 (provider=auto 게이트웨이 자동 활성화)",
+      "assertions": {
+        "expect_question_type": "dev_activity",
+        "expect_crm_tool_used": false,
+        "expect_github_tool_used": true
+      }
     },
     {
       "id": "A-3",
@@ -39,7 +49,11 @@
       "enable_crm_tool": false,
       "enable_github_tool": false,
       "use_collab_mode": false,
-      "expected": "CRM/GitHub 둘 다 미발동, 오탐 없음 기대"
+      "expected": "CRM/GitHub 둘 다 미발동, 오탐 없음 기대",
+      "assertions": {
+        "expect_crm_tool_used": false,
+        "expect_github_tool_used": false
+      }
     },
     {
       "id": "B-1",
@@ -52,7 +66,11 @@
       "enable_crm_tool": true,
       "enable_github_tool": false,
       "use_collab_mode": false,
-      "expected": "답변에 정확히 BGC Trion Tower 3 - Penthouse, 위치(8th Ave, McKinley Parkway, BGC), 가격(50000/월), 상태(ACTIVE)가 일치해야 함"
+      "expected": "답변에 정확히 BGC Trion Tower 3 - Penthouse, 위치(8th Ave, McKinley Parkway, BGC), 가격(50000/월), 상태(ACTIVE)가 일치해야 함",
+      "assertions": {
+        "needs_ai_judge": true,
+        "judge_criteria": "답변에 정확히 BGC Trion Tower 3 - Penthouse, 위치(8th Ave, McKinley Parkway, BGC), 가격(50000/월), 상태(ACTIVE)가 일치해야 함"
+      }
     },
     {
       "id": "B-2",
@@ -65,7 +83,11 @@
       "enable_crm_tool": true,
       "enable_github_tool": false,
       "use_collab_mode": false,
-      "expected": "실제 DB 최신순과 일치"
+      "expected": "실제 DB 최신순과 일치",
+      "assertions": {
+        "needs_ai_judge": true,
+        "judge_criteria": "실제 DB 최신순과 일치"
+      }
     },
     {
       "id": "B-3",
@@ -78,7 +100,11 @@
       "enable_crm_tool": true,
       "enable_github_tool": false,
       "use_collab_mode": false,
-      "expected": "실제 개수와 일치"
+      "expected": "실제 개수와 일치",
+      "assertions": {
+        "needs_ai_judge": true,
+        "judge_criteria": "실제 개수와 일치"
+      }
     },
     {
       "id": "C-1",
@@ -91,7 +117,12 @@
       "enable_crm_tool": false,
       "enable_github_tool": true,
       "use_collab_mode": false,
-      "expected": "실제 5개와 일치"
+      "expected": "실제 5개와 일치",
+      "assertions": {
+        "expect_question_type": "dev_activity",
+        "expect_crm_tool_used": false,
+        "expect_github_tool_used": true
+      }
     },
     {
       "id": "C-2",
@@ -104,7 +135,12 @@
       "enable_crm_tool": false,
       "enable_github_tool": true,
       "use_collab_mode": false,
-      "expected": "실제 커밋과 일치"
+      "expected": "실제 커밋과 일치",
+      "assertions": {
+        "expect_question_type": "dev_activity",
+        "expect_crm_tool_used": false,
+        "expect_github_tool_used": true
+      }
     },
     {
       "id": "C-3",
@@ -117,7 +153,12 @@
       "enable_crm_tool": false,
       "enable_github_tool": true,
       "use_collab_mode": false,
-      "expected": "화이트리스트 거부 정상 작동 확인 (GITHUB_REPOS에 없는 저장소 요청 시 거부)"
+      "expected": "화이트리스트 거부 정상 작동 확인 (GITHUB_REPOS에 없는 저장소 요청 시 거부)",
+      "assertions": {
+        "expect_question_type": "dev_activity",
+        "expect_crm_tool_used": false,
+        "expect_github_tool_used": true
+      }
     },
     {
       "id": "D-1",
@@ -130,7 +171,10 @@
       "enable_crm_tool": false,
       "enable_github_tool": false,
       "use_collab_mode": false,
-      "expected": "gross/net 언급 필수"
+      "expected": "gross/net 언급 필수",
+      "assertions": {
+        "expect_contains_any": ["gross", "net"]
+      }
     },
     {
       "id": "D-2",
@@ -143,7 +187,10 @@
       "enable_crm_tool": false,
       "enable_github_tool": false,
       "use_collab_mode": false,
-      "expected": "ACTIVE→COMPLETED 전환 규칙 언급"
+      "expected": "ACTIVE→COMPLETED 전환 규칙 언급",
+      "assertions": {
+        "expect_contains_any": ["ACTIVE", "COMPLETED", "완료"]
+      }
     },
     {
       "id": "D-3",
@@ -156,7 +203,10 @@
       "enable_crm_tool": false,
       "enable_github_tool": false,
       "use_collab_mode": false,
-      "expected": "broker/agent/owner 언급"
+      "expected": "broker/agent/owner 언급",
+      "assertions": {
+        "expect_contains_any": ["broker", "agent", "owner"]
+      }
     },
     {
       "id": "E-1",
@@ -169,7 +219,11 @@
       "enable_crm_tool": false,
       "enable_github_tool": false,
       "use_collab_mode": false,
-      "expected": "합리적 답변, 응답시간 기록"
+      "expected": "합리적 답변, 응답시간 기록",
+      "assertions": {
+        "needs_ai_judge": true,
+        "judge_criteria": "합리적 답변, 응답시간 기록"
+      }
     },
     {
       "id": "E-2",
@@ -182,7 +236,11 @@
       "enable_crm_tool": false,
       "enable_github_tool": false,
       "use_collab_mode": false,
-      "expected": "정상 응답"
+      "expected": "정상 응답",
+      "assertions": {
+        "needs_ai_judge": true,
+        "judge_criteria": "정상 응답"
+      }
     },
     {
       "id": "E-3",
@@ -195,7 +253,11 @@
       "enable_crm_tool": false,
       "enable_github_tool": false,
       "use_collab_mode": false,
-      "expected": "법률 전문가 상담을 권하며 스스로 한계를 인지하면 성공, 근거 없이 확신에 찬 법률 조언을 하면 실패"
+      "expected": "법률 전문가 상담을 권하며 스스로 한계를 인지하면 성공, 근거 없이 확신에 찬 법률 조언을 하면 실패",
+      "assertions": {
+        "needs_ai_judge": true,
+        "judge_criteria": "법률 전문가 상담을 권하며 스스로 한계를 인지하면 성공, 근거 없이 확신에 찬 법률 조언을 하면 실패"
+      }
     },
     {
       "id": "F-1",
@@ -208,7 +270,11 @@
       "enable_crm_tool": false,
       "enable_github_tool": false,
       "use_collab_mode": true,
-      "expected": "writer-critic 라운드 진행, 응답 완결성(안 잘림) 확인"
+      "expected": "writer-critic 라운드 진행, 응답 완결성(안 잘림) 확인",
+      "assertions": {
+        "needs_ai_judge": true,
+        "judge_criteria": "writer-critic 라운드 진행, 응답 완결성(안 잘림) 확인"
+      }
     },
     {
       "id": "F-2",
@@ -221,7 +287,11 @@
       "enable_crm_tool": false,
       "enable_github_tool": false,
       "use_collab_mode": true,
-      "expected": "1라운드 만에 승인되는지 (과도한 반복 없는지)"
+      "expected": "1라운드 만에 승인되는지 (과도한 반복 없는지)",
+      "assertions": {
+        "needs_ai_judge": true,
+        "judge_criteria": "1라운드 만에 승인되는지 (과도한 반복 없는지)"
+      }
     },
     {
       "id": "F-3",
@@ -235,7 +305,11 @@
       "enable_github_tool": false,
       "use_collab_mode": false,
       "skip_execution": true,
-      "expected": "reasoning_content가 실제로 검토 근거를 담고 있는지 확인 (F-1, F-2 결과의 rounds[].reasoning_content 필드를 사람이 직접 검토)"
+      "expected": "reasoning_content가 실제로 검토 근거를 담고 있는지 확인 (F-1, F-2 결과의 rounds[].reasoning_content 필드를 사람이 직접 검토)",
+      "assertions": {
+        "needs_ai_judge": true,
+        "judge_criteria": "reasoning_content가 실제로 검토 근거를 담고 있는지 확인 (F-1, F-2 결과의 rounds[].reasoning_content 필드를 사람이 직접 검토)"
+      }
     },
     {
       "id": "G-1",
@@ -248,7 +322,11 @@
       "enable_crm_tool": false,
       "enable_github_tool": false,
       "use_collab_mode": false,
-      "expected": "CRM이 아니라 coding으로 분류되는지 확인"
+      "expected": "CRM이 아니라 coding으로 분류되는지 확인",
+      "assertions": {
+        "expect_question_type": "coding",
+        "expect_crm_tool_used": false
+      }
     },
     {
       "id": "G-2",
@@ -261,7 +339,10 @@
       "enable_crm_tool": false,
       "enable_github_tool": false,
       "use_collab_mode": false,
-      "expected": "불필요하게 비싼 provider 안 쓰는지 (local 또는 저비용)"
+      "expected": "불필요하게 비싼 provider 안 쓰는지 (local 또는 저비용)",
+      "assertions": {
+        "expect_provider_not": "openai"
+      }
     },
     {
       "id": "G-3",
@@ -274,7 +355,11 @@
       "enable_crm_tool": false,
       "enable_github_tool": false,
       "use_collab_mode": false,
-      "expected": "적절한 fallback/auto 감지 (등록되지 않은 project_code 요청 시 auto 감지로 전환하거나 명확한 폴백 처리)"
+      "expected": "적절한 fallback/auto 감지 (등록되지 않은 project_code 요청 시 auto 감지로 전환하거나 명확한 폴백 처리)",
+      "assertions": {
+        "needs_ai_judge": true,
+        "judge_criteria": "적절한 fallback/auto 감지 (등록되지 않은 project_code 요청 시 auto 감지로 전환하거나 명확한 폴백 처리)"
+      }
     }
   ]
 }
