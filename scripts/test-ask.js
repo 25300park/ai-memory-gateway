@@ -20,8 +20,7 @@
  *   node scripts/test-ask.js "필터 버튼 버그를 GitHub 이슈로 만들어줘" anthropic true false rbs_homes false true
  */
 
-const path = require('path');
-require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+const { callAgentAsk } = require('./lib/api-client');
 
 const question = process.argv[2];
 const provider = process.argv[3] || 'auto';
@@ -36,30 +35,17 @@ if (!question) {
   process.exit(1);
 }
 
-const baseUrl = process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 3010}`;
-const adminToken = process.env.ADMIN_TOKEN || '';
-
 async function main() {
-  const res = await fetch(`${baseUrl}/ai/agent/ask`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      'x-admin-token': adminToken
-    },
-    body: JSON.stringify({
-      question,
-      provider,
-      live,
-      enable_crm_tool: enableCrmTool,
-      project_code: projectCode,
-      enable_github_tool: enableGithubTool,
-      enable_write_proposals: enableWriteProposals
-    })
+  const { http_status, body } = await callAgentAsk(question, {
+    provider,
+    live,
+    enable_crm_tool: enableCrmTool,
+    project_code: projectCode,
+    enable_github_tool: enableGithubTool,
+    enable_write_proposals: enableWriteProposals
   });
 
-  const body = await res.json();
-
-  console.log(`HTTP ${res.status}`);
+  console.log(`HTTP ${http_status}`);
   console.log('ok:', body.ok);
   console.log('question_type:', body.question_type);
   console.log('provider_requested:', body.provider_requested);

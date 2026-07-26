@@ -16,14 +16,13 @@
 
 const fs = require('fs');
 const path = require('path');
-require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+const { loadEnv, callAgentAsk, callAgentCollab } = require('./lib/api-client');
 
 const QUESTIONS_PATH = path.join(__dirname, 'eval-questions.json');
 const RESULTS_DIR = path.join(__dirname, '..', 'results');
 const DELAY_BETWEEN_QUESTIONS_MS = 1000;
 
-const baseUrl = process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 3010}`;
-const adminToken = process.env.ADMIN_TOKEN || '';
+const { baseUrl } = loadEnv();
 
 function parseArgs(argv) {
   const args = { only: null, limit: null };
@@ -43,24 +42,15 @@ function sleep(ms) {
 }
 
 async function callAsk(item) {
-  const res = await fetch(`${baseUrl}/ai/agent/ask`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      'x-admin-token': adminToken
-    },
-    body: JSON.stringify({
-      question: item.question,
-      project_code: item.project_code,
-      provider: item.provider,
-      live: item.live,
-      enable_crm_tool: item.enable_crm_tool,
-      enable_github_tool: item.enable_github_tool
-    })
+  const { http_status, body } = await callAgentAsk(item.question, {
+    project_code: item.project_code,
+    provider: item.provider,
+    live: item.live,
+    enable_crm_tool: item.enable_crm_tool,
+    enable_github_tool: item.enable_github_tool
   });
-  const body = await res.json();
   return {
-    http_status: res.status,
+    http_status,
     ok: Boolean(body.ok),
     answer: body.answer ?? null,
     provider_used: body.provider_used ?? null,
@@ -75,21 +65,11 @@ async function callAsk(item) {
 }
 
 async function callCollab(item) {
-  const res = await fetch(`${baseUrl}/ai/agent/collab`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      'x-admin-token': adminToken
-    },
-    body: JSON.stringify({
-      question: item.question,
-      project_code: item.project_code,
-      confirm_live: true
-    })
+  const { http_status, body } = await callAgentCollab(item.question, {
+    project_code: item.project_code
   });
-  const body = await res.json();
   return {
-    http_status: res.status,
+    http_status,
     ok: Boolean(body.ok),
     answer: body.final_content ?? null,
     provider_used: 'collab(anthropic+lmstudio)',
