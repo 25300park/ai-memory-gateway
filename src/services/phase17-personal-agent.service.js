@@ -1558,39 +1558,51 @@ function parseCriticVerdict(content) {
 // the shared env values other callers (e.g. /agent/ask) rely on.
 const COLLAB_WRITER_MAX_OUTPUT_TOKENS = Number(process.env.COLLAB_WRITER_MAX_OUTPUT_TOKENS) || 4000;
 const COLLAB_CRITIC_MAX_OUTPUT_TOKENS = Number(process.env.COLLAB_CRITIC_MAX_OUTPUT_TOKENS) || 2000;
+// Phase 14-1: dev-qa is a second role pair built on the same runTwoAgentLoop - separate
+// budgets so tuning one pair's output length never affects the other's.
+const DEV_QA_PLAN_MAX_OUTPUT_TOKENS = Number(process.env.DEV_QA_PLAN_MAX_OUTPUT_TOKENS) || 4000;
+const DEV_QA_REVIEW_MAX_OUTPUT_TOKENS = Number(process.env.DEV_QA_REVIEW_MAX_OUTPUT_TOKENS) || 2000;
 
-async function callCollabWriter(prompt) {
-  const liveConfig = modelProvider.getAnthropicLiveConfig();
-  const modelProfile = modelProvider.normalizeModelProfile({
-    model_code: 'collab_writer_anthropic',
-    provider: 'anthropic',
-    model_name: liveConfig.default_model,
-    display_name: 'Collab Writer (Anthropic)',
-    max_output_tokens: COLLAB_WRITER_MAX_OUTPUT_TOKENS,
-    is_active: true
-  });
-  return modelProvider.callAnthropicLive({
-    modelProfile,
-    finalPrompt: prompt,
-    max_output_tokens_override: COLLAB_WRITER_MAX_OUTPUT_TOKENS
-  });
-}
+// Phase 14-1: generalized out of callCollabWriter/callCollabCritic so any two-agent role
+// pair (writer/critic, dev/qa, ...) can share the same provider-dispatch logic instead of
+// each pair hand-rolling its own modelProvider wiring. Only anthropic/lmstudio are wired
+// since those are the only providers any collab role has used so far.
+async function callTwoAgentRoleProvider({ provider, prompt, maxOutputTokens, modelCode, displayName }) {
+  if (provider === 'anthropic') {
+    const liveConfig = modelProvider.getAnthropicLiveConfig();
+    const modelProfile = modelProvider.normalizeModelProfile({
+      model_code: modelCode,
+      provider: 'anthropic',
+      model_name: liveConfig.default_model,
+      display_name: displayName,
+      max_output_tokens: maxOutputTokens,
+      is_active: true
+    });
+    return modelProvider.callAnthropicLive({
+      modelProfile,
+      finalPrompt: prompt,
+      max_output_tokens_override: maxOutputTokens
+    });
+  }
 
-async function callCollabCritic(prompt) {
-  const liveConfig = modelProvider.getLmStudioLiveConfig();
-  const modelProfile = modelProvider.normalizeModelProfile({
-    model_code: 'collab_critic_lmstudio',
-    provider: 'lmstudio',
-    model_name: liveConfig.default_model,
-    display_name: 'Collab Critic (LM Studio)',
-    max_output_tokens: COLLAB_CRITIC_MAX_OUTPUT_TOKENS,
-    is_active: true
-  });
-  return modelProvider.callLmStudioLive({
-    modelProfile,
-    finalPrompt: prompt,
-    max_output_tokens_override: COLLAB_CRITIC_MAX_OUTPUT_TOKENS
-  });
+  if (provider === 'lmstudio') {
+    const liveConfig = modelProvider.getLmStudioLiveConfig();
+    const modelProfile = modelProvider.normalizeModelProfile({
+      model_code: modelCode,
+      provider: 'lmstudio',
+      model_name: liveConfig.default_model,
+      display_name: displayName,
+      max_output_tokens: maxOutputTokens,
+      is_active: true
+    });
+    return modelProvider.callLmStudioLive({
+      modelProfile,
+      finalPrompt: prompt,
+      max_output_tokens_override: maxOutputTokens
+    });
+  }
+
+  throw new Error(`runTwoAgentLoop: unsupported provider "${provider}" (only anthropic/lmstudio are wired).`);
 }
 
 async function insertCollabRound(db, { collabSessionId, projectCode, roundNo, role, providerUsed, content, reasoningContent, verdict }) {
@@ -1613,8 +1625,18 @@ async function insertCollabRound(db, { collabSessionId, projectCode, roundNo, ro
   };
 }
 
-async function runWriterCriticLoop(db, { question, projectCode, maxRounds = 3 } = {}) {
+// Phase 14-1: generalized from the original writer/critic-only loop. roleA proposes
+// content each round (round 1 gets no previousContent/feedback; later rounds get its own
+// previous output plus roleB's latest feedback), roleB reviews roleA's latest content and
+// produces a verdict via roleB.verdictParser. Loop stops early once that verdict is
+// 'approved', same as before. Any role pair (writer/critic, dev/qa, ...) plugs in via
+// { name, provider, maxOutputTokens, modelCode, displayName, promptBuilder } (roleB also
+// needs verdictParser). collab_rounds.role is VARCHAR(20) with no enum constraint, so any
+// role name fits without a schema change.
+async function runTwoAgentLoop(db, { roleA, roleB, question, projectCode, maxRounds = 3 } = {}) {
   if (!modelProvider) throw new Error('model-provider.service is not available.');
+  if (!roleA || !roleB) throw new Error('roleA and roleB are required.');
+  if (typeof roleB.verdictParser !== 'function') throw new Error('roleB.verdictParser is required.');
 
   await ensureTables(db);
 
@@ -1627,51 +1649,77 @@ async function runWriterCriticLoop(db, { question, projectCode, maxRounds = 3 } 
   const collabSessionId = `collab-${detected.detected_project_code}-${Date.now()}`;
 
   const rounds = [];
-  let writerContent = null;
-  let criticContent = null;
+  let contentA = null;
+  let contentB = null;
   let verdict = null;
   let completedRounds = 0;
 
   for (let roundNo = 1; roundNo <= resolvedMaxRounds; roundNo += 1) {
-    const writerPrompt = roundNo === 1
-      ? buildProviderPrompt({ question: trimmedQuestion, projectCode: detected.detected_project_code, context, detection: detected })
-      : buildWriterRevisionPrompt({ question: trimmedQuestion, previousDraft: writerContent, feedback: criticContent });
+    const promptA = roleA.promptBuilder({
+      question: trimmedQuestion,
+      projectCode: detected.detected_project_code,
+      context,
+      detection: detected,
+      previousContent: contentA,
+      feedback: contentB,
+      roundNo
+    });
 
-    let writerResponse;
+    let responseA;
     try {
-      writerResponse = await callCollabWriter(writerPrompt);
+      responseA = await callTwoAgentRoleProvider({
+        provider: roleA.provider,
+        prompt: promptA,
+        maxOutputTokens: roleA.maxOutputTokens,
+        modelCode: roleA.modelCode || `collab_${roleA.name}_${roleA.provider}`,
+        displayName: roleA.displayName || `Collab ${roleA.name} (${roleA.provider})`
+      });
     } catch (error) {
-      throw new Error(`Writer(anthropic) call failed at round ${roundNo}: ${error.message}`);
+      throw new Error(`${roleA.name}(${roleA.provider}) call failed at round ${roundNo}: ${error.message}`);
     }
-    writerContent = extractProviderAnswer(writerResponse);
+    contentA = extractProviderAnswer(responseA);
     rounds.push(await insertCollabRound(db, {
       collabSessionId,
       projectCode: detected.detected_project_code,
       roundNo,
-      role: 'writer',
-      providerUsed: writerResponse.provider || 'anthropic',
-      content: writerContent,
-      reasoningContent: typeof writerResponse.reasoning_content === 'string' ? writerResponse.reasoning_content : null,
+      role: roleA.name,
+      providerUsed: responseA.provider || roleA.provider,
+      content: contentA,
+      reasoningContent: typeof responseA.reasoning_content === 'string' ? responseA.reasoning_content : null,
       verdict: null
     }));
 
-    const criticPrompt = buildCriticPrompt({ draft: writerContent, originalQuestion: trimmedQuestion });
-    let criticResponse;
+    const promptB = roleB.promptBuilder({
+      question: trimmedQuestion,
+      projectCode: detected.detected_project_code,
+      context,
+      detection: detected,
+      content: contentA,
+      roundNo
+    });
+
+    let responseB;
     try {
-      criticResponse = await callCollabCritic(criticPrompt);
+      responseB = await callTwoAgentRoleProvider({
+        provider: roleB.provider,
+        prompt: promptB,
+        maxOutputTokens: roleB.maxOutputTokens,
+        modelCode: roleB.modelCode || `collab_${roleB.name}_${roleB.provider}`,
+        displayName: roleB.displayName || `Collab ${roleB.name} (${roleB.provider})`
+      });
     } catch (error) {
-      throw new Error(`Critic(lmstudio) call failed at round ${roundNo}: ${error.message}`);
+      throw new Error(`${roleB.name}(${roleB.provider}) call failed at round ${roundNo}: ${error.message}`);
     }
-    criticContent = extractProviderAnswer(criticResponse);
-    verdict = parseCriticVerdict(criticContent);
+    contentB = extractProviderAnswer(responseB);
+    verdict = roleB.verdictParser(contentB);
     rounds.push(await insertCollabRound(db, {
       collabSessionId,
       projectCode: detected.detected_project_code,
       roundNo,
-      role: 'critic',
-      providerUsed: criticResponse.provider || 'lmstudio',
-      content: criticContent,
-      reasoningContent: typeof criticResponse.reasoning_content === 'string' ? criticResponse.reasoning_content : null,
+      role: roleB.name,
+      providerUsed: responseB.provider || roleB.provider,
+      content: contentB,
+      reasoningContent: typeof responseB.reasoning_content === 'string' ? responseB.reasoning_content : null,
       verdict
     }));
 
@@ -1684,11 +1732,130 @@ async function runWriterCriticLoop(db, { question, projectCode, maxRounds = 3 } 
     collab_session_id: collabSessionId,
     project_code: detected.detected_project_code,
     detection: detected,
-    final_content: writerContent,
+    final_content: contentA,
     final_verdict: verdict,
     total_rounds: completedRounds,
     max_rounds: resolvedMaxRounds,
     rounds
+  };
+}
+
+async function runWriterCriticLoop(db, { question, projectCode, maxRounds = 3 } = {}) {
+  return runTwoAgentLoop(db, {
+    roleA: {
+      name: 'writer',
+      provider: 'anthropic',
+      maxOutputTokens: COLLAB_WRITER_MAX_OUTPUT_TOKENS,
+      modelCode: 'collab_writer_anthropic',
+      displayName: 'Collab Writer (Anthropic)',
+      promptBuilder: ({ question: q, projectCode: pc, context, detection, previousContent, feedback, roundNo }) => (
+        roundNo === 1
+          ? buildProviderPrompt({ question: q, projectCode: pc, context, detection })
+          : buildWriterRevisionPrompt({ question: q, previousDraft: previousContent, feedback })
+      )
+    },
+    roleB: {
+      name: 'critic',
+      provider: 'lmstudio',
+      maxOutputTokens: COLLAB_CRITIC_MAX_OUTPUT_TOKENS,
+      modelCode: 'collab_critic_lmstudio',
+      displayName: 'Collab Critic (LM Studio)',
+      promptBuilder: ({ question: q, content }) => buildCriticPrompt({ draft: content, originalQuestion: q }),
+      verdictParser: parseCriticVerdict
+    },
+    question,
+    projectCode,
+    maxRounds
+  });
+}
+
+// Phase 14-1: dev proposes a concrete change plan (files/how/why - no code), qa reviews it
+// for missing error handling, regression risk, and test gaps. Both fixed to anthropic for
+// now - lmstudio hasn't been validated for technical plan review, and plan quality matters
+// more here than cost.
+function buildDevProposalPrompt({ question, previousProposal, feedback }) {
+  const lines = [
+    '당신은 개발 계획 수립자입니다. 사용자 요청에 대해 구체적인 개발 계획(어떤 파일을, 어떻게, 왜 수정해야 하는지)을 작성하세요.',
+    '실제 코드를 작성하지 말고 계획만 서술하세요.',
+    '',
+    '## 사용자 요청',
+    question
+  ];
+
+  if (previousProposal) {
+    lines.push('', '=== 이전 계획 ===', previousProposal);
+  }
+  if (feedback) {
+    lines.push('', '=== QA 피드백 ===', feedback, '', '위 피드백을 반영해서 계획을 다시 작성하세요. 설명 없이 최종 계획만 응답하세요.');
+  }
+
+  return lines.join('\n');
+}
+
+function buildQaReviewPrompt({ proposal }) {
+  return [
+    '당신은 QA 검토자입니다. 이 개발 계획에 누락된 예외 처리, 회귀 위험, 테스트 필요 항목이 있는지 검토하세요.',
+    '문제 없으면 응답을 정확히 "APPROVED"로 시작하세요.',
+    '문제가 있으면 응답을 정확히 "NEEDS_REVISION"으로 시작한 뒤, 구체적인 지적사항을 목록으로 나열하세요.',
+    '',
+    '=== 검토 대상 개발 계획 ===',
+    proposal
+  ].join('\n');
+}
+
+async function runDevQaPlan(db, { question, projectCode, maxRounds = 3 } = {}) {
+  const loopResult = await runTwoAgentLoop(db, {
+    roleA: {
+      name: 'dev',
+      provider: 'anthropic',
+      maxOutputTokens: DEV_QA_PLAN_MAX_OUTPUT_TOKENS,
+      modelCode: 'dev_qa_dev_anthropic',
+      displayName: 'Dev Plan Proposer (Anthropic)',
+      promptBuilder: ({ question: q, previousContent, feedback }) =>
+        buildDevProposalPrompt({ question: q, previousProposal: previousContent, feedback })
+    },
+    roleB: {
+      name: 'qa',
+      provider: 'anthropic',
+      maxOutputTokens: DEV_QA_REVIEW_MAX_OUTPUT_TOKENS,
+      modelCode: 'dev_qa_qa_anthropic',
+      displayName: 'Dev Plan QA Reviewer (Anthropic)',
+      promptBuilder: ({ content }) => buildQaReviewPrompt({ proposal: content }),
+      verdictParser: parseCriticVerdict
+    },
+    question,
+    projectCode,
+    maxRounds
+  });
+
+  // Registration only, per Phase 6-4/6-5's propose/approve queue - never executed
+  // automatically. Recorded regardless of final_verdict (not just when approved) so a human
+  // reviewer can see a plan that never reached agreement instead of it silently vanishing;
+  // the verdict is included in the payload so that distinction isn't lost.
+  let pendingAction = null;
+  if (pendingActionsService) {
+    try {
+      pendingAction = await pendingActionsService.proposeAction(db, {
+        project_code: loopResult.project_code,
+        agent_session_id: loopResult.collab_session_id,
+        action_type: 'dev_plan_proposal',
+        payload: {
+          question,
+          plan: loopResult.final_content,
+          verdict: loopResult.final_verdict,
+          total_rounds: loopResult.total_rounds,
+          collab_session_id: loopResult.collab_session_id
+        },
+        proposed_by: 'dev_qa_loop'
+      });
+    } catch (error) {
+      pendingAction = { ok: false, error: error.message };
+    }
+  }
+
+  return {
+    ...loopResult,
+    pending_action: pendingAction
   };
 }
 
@@ -2314,7 +2481,9 @@ module.exports = {
   detectProject,
   searchMemoryContext,
   executeProviderAnswer,
+  runTwoAgentLoop,
   runWriterCriticLoop,
+  runDevQaPlan,
   inferGatewayQuestionType,
   buildGatewayProviderDecision,
   saveAgentConversationLog,

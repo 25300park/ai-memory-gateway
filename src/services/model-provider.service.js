@@ -1455,8 +1455,9 @@ async function testLmStudioLiveProvider({ model_name = null, prompt = "Phase 11-
     // has no way to tell that apart from a real, complete answer. One automatic retry gives
     // the local model a second chance; if it's still empty/too short, this is reported
     // honestly via lmstudio_retry_exhausted rather than passed off as a normal success.
-    // Only applies to this executeProviderAnswer path - callCollabCritic calls
-    // callLmStudioLive() directly and never goes through testLmStudioLiveProvider.
+    // Only applies to this executeProviderAnswer path - the two-agent collab loop
+    // (runTwoAgentLoop's callTwoAgentRoleProvider) calls callLmStudioLive() directly and
+    // never goes through testLmStudioLiveProvider.
     const isTooShort = (text) => !text || String(text).trim().length < LMSTUDIO_MIN_ANSWER_LENGTH;
     let lmstudioRetried = false;
     let lmstudioRetryExhausted = false;

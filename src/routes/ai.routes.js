@@ -159,6 +159,44 @@ router.post('/agent/collab', asyncHandler(async (req, res) => {
 }));
 
 // -----------------------------------------------------------------------------
+// Phase 14-1: dev(anthropic) <-> qa(anthropic) development-planning loop, built on the
+// same runTwoAgentLoop as /agent/collab. Never writes code or touches files - only
+// produces a plan and registers it in pending_actions (action_type: dev_plan_proposal)
+// for a human to review. Always makes real provider calls, so confirm_live: true is
+// required just like /agent/collab.
+// -----------------------------------------------------------------------------
+router.post('/agent/dev-qa-plan', asyncHandler(async (req, res) => {
+  const { question, project_code, max_rounds, confirm_live } = req.body || {};
+
+  if (confirm_live !== true) {
+    return sendStandardError(res, {
+      req,
+      code: 'VALIDATION_ERROR',
+      message: 'confirm_live must be true. This endpoint always makes real provider calls (dev=anthropic, qa=anthropic).',
+      statusCode: 400,
+      source: 'ai.routes:/agent/dev-qa-plan'
+    });
+  }
+
+  try {
+    const result = await personalAgent.runDevQaPlan(db, {
+      question,
+      projectCode: project_code || 'auto',
+      maxRounds: max_rounds
+    });
+    res.json(result);
+  } catch (error) {
+    return sendStandardError(res, {
+      req,
+      code: 'DEV_QA_PLAN_FAILED',
+      message: error.message,
+      statusCode: 502,
+      source: 'ai.routes:/agent/dev-qa-plan'
+    });
+  }
+}));
+
+// -----------------------------------------------------------------------------
 // Phase 6-4: propose/approve queue for write-side agent actions (no execution yet)
 // -----------------------------------------------------------------------------
 router.get('/agent/actions', asyncHandler(async (req, res) => {
