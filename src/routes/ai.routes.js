@@ -197,6 +197,44 @@ router.post('/agent/dev-qa-plan', asyncHandler(async (req, res) => {
 }));
 
 // -----------------------------------------------------------------------------
+// Phase 14-4: planner(anthropic) -> dev(anthropic) <-> qa(anthropic) 3-role pipeline. The
+// planner concretizes the user's (possibly vague) request into scope/purpose/constraints
+// once, then the existing dev-qa loop runs against that instead of the raw request.
+// Registers pending_actions (action_type: team_plan_proposal). Same confirm_live pattern
+// as /agent/collab and /agent/dev-qa-plan.
+// -----------------------------------------------------------------------------
+router.post('/agent/team-plan', asyncHandler(async (req, res) => {
+  const { question, project_code, max_rounds, confirm_live } = req.body || {};
+
+  if (confirm_live !== true) {
+    return sendStandardError(res, {
+      req,
+      code: 'VALIDATION_ERROR',
+      message: 'confirm_live must be true. This endpoint always makes real provider calls (planner=anthropic, dev=anthropic, qa=anthropic).',
+      statusCode: 400,
+      source: 'ai.routes:/agent/team-plan'
+    });
+  }
+
+  try {
+    const result = await personalAgent.runPlanDevQaPipeline(db, {
+      question,
+      projectCode: project_code || 'auto',
+      maxRounds: max_rounds
+    });
+    res.json(result);
+  } catch (error) {
+    return sendStandardError(res, {
+      req,
+      code: 'TEAM_PLAN_FAILED',
+      message: error.message,
+      statusCode: 502,
+      source: 'ai.routes:/agent/team-plan'
+    });
+  }
+}));
+
+// -----------------------------------------------------------------------------
 // Phase 6-4: propose/approve queue for write-side agent actions (no execution yet)
 // -----------------------------------------------------------------------------
 router.get('/agent/actions', asyncHandler(async (req, res) => {

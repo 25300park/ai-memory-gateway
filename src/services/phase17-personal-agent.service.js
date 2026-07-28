@@ -1639,7 +1639,7 @@ async function insertCollabRound(db, { collabSessionId, projectCode, roundNo, ro
 // { name, provider, maxOutputTokens, modelCode, displayName, promptBuilder } (roleB also
 // needs verdictParser). collab_rounds.role is VARCHAR(20) with no enum constraint, so any
 // role name fits without a schema change.
-async function runTwoAgentLoop(db, { roleA, roleB, question, projectCode, maxRounds = 3 } = {}) {
+async function runTwoAgentLoop(db, { roleA, roleB, question, projectCode, maxRounds = 3, collabSessionId: providedSessionId = null } = {}) {
   if (!modelProvider) throw new Error('model-provider.service is not available.');
   if (!roleA || !roleB) throw new Error('roleA and roleB are required.');
   if (typeof roleB.verdictParser !== 'function') throw new Error('roleB.verdictParser is required.');
@@ -1652,7 +1652,10 @@ async function runTwoAgentLoop(db, { roleA, roleB, question, projectCode, maxRou
   const resolvedMaxRounds = Math.max(1, Math.min(Number(maxRounds) || 3, 5));
   const detected = await detectProject(db, trimmedQuestion, projectCode || 'auto');
   const context = await searchMemoryContext(db, detected.detected_project_code, trimmedQuestion, 5);
-  const collabSessionId = `collab-${detected.detected_project_code}-${Date.now()}`;
+  // Phase 14-4: the plan-dev-qa pipeline generates one session id up front for its planner
+  // round (round_no: 0) and passes it in here so the dev/qa rounds that follow land in the
+  // same collab_session_id instead of starting a new one.
+  const collabSessionId = providedSessionId || `collab-${detected.detected_project_code}-${Date.now()}`;
 
   const rounds = [];
   let contentA = null;
@@ -1811,8 +1814,11 @@ function buildQaReviewPrompt({ proposal }) {
   ].join('\n');
 }
 
-async function runDevQaPlan(db, { question, projectCode, maxRounds = 3 } = {}) {
-  const loopResult = await runTwoAgentLoop(db, {
+// Phase 14-4: split out of runDevQaPlan so the plan-dev-qa pipeline can drive the same
+// dev/qa role pair with a planner-produced requirements doc as the "question" instead of
+// the user's raw text, and with a session id it already generated for its planner round.
+async function runDevQaLoop(db, { question, projectCode, maxRounds = 3, collabSessionId = null } = {}) {
+  return runTwoAgentLoop(db, {
     roleA: {
       name: 'dev',
       provider: 'anthropic',
@@ -1835,8 +1841,13 @@ async function runDevQaPlan(db, { question, projectCode, maxRounds = 3 } = {}) {
     },
     question,
     projectCode,
-    maxRounds
+    maxRounds,
+    collabSessionId
   });
+}
+
+async function runDevQaPlan(db, { question, projectCode, maxRounds = 3 } = {}) {
+  const loopResult = await runDevQaLoop(db, { question, projectCode, maxRounds });
 
   // Registration only, per Phase 6-4/6-5's propose/approve queue - never executed
   // automatically. Recorded regardless of final_verdict (not just when approved) so a human
@@ -1865,6 +1876,123 @@ async function runDevQaPlan(db, { question, projectCode, maxRounds = 3 } = {}) {
 
   return {
     ...loopResult,
+    pending_action: pendingAction
+  };
+}
+
+// Phase 14-4: planner turns a possibly-vague user request into a concrete requirements doc
+// (scope/purpose/constraints, with assumptions called out) before dev even sees it - a
+// single call, not a loop, since there's no reviewer role to send it back for revision.
+const PLANNER_MAX_OUTPUT_TOKENS = Number(process.env.PLANNER_MAX_OUTPUT_TOKENS) || 2000;
+
+function buildPlannerPrompt({ question, projectCode }) {
+  return [
+    '당신은 기획 담당자입니다. 사용자의 요청을 읽고, 개발팀이 실행 가능하도록 구체적인 요구사항(범위, 목적, 제약조건)으로 정리하세요.',
+    '모호한 부분이 있으면 합리적으로 가정하고 그 가정을 명시하세요.',
+    '실제 구현 방법은 서술하지 마세요 (그건 개발팀의 역할입니다).',
+    '',
+    `## 프로젝트: ${projectCode}`,
+    '',
+    '## 사용자 요청',
+    question
+  ].join('\n');
+}
+
+// callTwoAgentRoleProvider is generic enough to reuse for a single non-loop call - the
+// loop-specific bits (rounds, verdictParser, promptBuilder rebuilding each round) live in
+// runTwoAgentLoop, not in this dispatch function, so calling it once here is no different
+// from any one round of a two-agent loop.
+async function callPlanner(prompt) {
+  return callTwoAgentRoleProvider({
+    provider: 'anthropic',
+    prompt,
+    maxOutputTokens: PLANNER_MAX_OUTPUT_TOKENS,
+    modelCode: 'team_plan_planner_anthropic',
+    displayName: 'Team Plan Planner (Anthropic)',
+    timeoutMsOverride: DEV_QA_ANTHROPIC_TIMEOUT_MS
+  });
+}
+
+// Phase 14-4: 3-role pipeline - planner concretizes the request (round_no: 0), then the
+// existing dev-qa loop runs against the planner's output instead of the user's raw text.
+// All three roles share one collab_session_id so the console can show them as one thread.
+async function runPlanDevQaPipeline(db, { question, projectCode, maxRounds = 3 } = {}) {
+  if (!modelProvider) throw new Error('model-provider.service is not available.');
+
+  await ensureTables(db);
+
+  const trimmedQuestion = String(question || '').trim();
+  if (!trimmedQuestion) throw new Error('question is required');
+
+  const detected = await detectProject(db, trimmedQuestion, projectCode || 'auto');
+  const collabSessionId = `collab-${detected.detected_project_code}-${Date.now()}`;
+
+  const plannerPrompt = buildPlannerPrompt({ question: trimmedQuestion, projectCode: detected.detected_project_code });
+  let plannerResponse;
+  try {
+    plannerResponse = await callPlanner(plannerPrompt);
+  } catch (error) {
+    throw new Error(`planner(anthropic) call failed: ${error.message}`);
+  }
+  const plannerOutput = extractProviderAnswer(plannerResponse);
+
+  const plannerRound = await insertCollabRound(db, {
+    collabSessionId,
+    projectCode: detected.detected_project_code,
+    roundNo: 0,
+    role: 'planner',
+    providerUsed: plannerResponse.provider || 'anthropic',
+    content: plannerOutput,
+    reasoningContent: typeof plannerResponse.reasoning_content === 'string' ? plannerResponse.reasoning_content : null,
+    verdict: null
+  });
+
+  // The planner's concretized requirements doc becomes the dev-qa loop's "question" -
+  // dev's very first prompt (and every revision round after it) is built from this, not
+  // from the user's original, possibly-vague text.
+  const devQaResult = await runDevQaLoop(db, {
+    question: plannerOutput,
+    projectCode: detected.detected_project_code,
+    maxRounds,
+    collabSessionId
+  });
+
+  // Same principle as runDevQaPlan: register regardless of final_verdict, verdict is in the
+  // payload so a human reviewer can tell an agreed plan from one that never got there.
+  let pendingAction = null;
+  if (pendingActionsService) {
+    try {
+      pendingAction = await pendingActionsService.proposeAction(db, {
+        project_code: devQaResult.project_code,
+        agent_session_id: collabSessionId,
+        action_type: 'team_plan_proposal',
+        payload: {
+          question: trimmedQuestion,
+          planner_output: plannerOutput,
+          plan: devQaResult.final_content,
+          verdict: devQaResult.final_verdict,
+          total_rounds: devQaResult.total_rounds,
+          collab_session_id: collabSessionId
+        },
+        proposed_by: 'plan_dev_qa_pipeline'
+      });
+    } catch (error) {
+      pendingAction = { ok: false, error: error.message };
+    }
+  }
+
+  return {
+    ok: true,
+    collab_session_id: collabSessionId,
+    project_code: devQaResult.project_code,
+    detection: detected,
+    planner_output: plannerOutput,
+    dev_qa_rounds: devQaResult.rounds,
+    final_content: devQaResult.final_content,
+    final_verdict: devQaResult.final_verdict,
+    total_rounds: devQaResult.total_rounds,
+    max_rounds: devQaResult.max_rounds,
+    rounds: [plannerRound, ...devQaResult.rounds],
     pending_action: pendingAction
   };
 }
@@ -2494,6 +2622,7 @@ module.exports = {
   runTwoAgentLoop,
   runWriterCriticLoop,
   runDevQaPlan,
+  runPlanDevQaPipeline,
   inferGatewayQuestionType,
   buildGatewayProviderDecision,
   saveAgentConversationLog,
