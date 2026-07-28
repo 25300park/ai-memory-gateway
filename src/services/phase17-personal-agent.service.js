@@ -1562,12 +1562,17 @@ const COLLAB_CRITIC_MAX_OUTPUT_TOKENS = Number(process.env.COLLAB_CRITIC_MAX_OUT
 // budgets so tuning one pair's output length never affects the other's.
 const DEV_QA_PLAN_MAX_OUTPUT_TOKENS = Number(process.env.DEV_QA_PLAN_MAX_OUTPUT_TOKENS) || 4000;
 const DEV_QA_REVIEW_MAX_OUTPUT_TOKENS = Number(process.env.DEV_QA_REVIEW_MAX_OUTPUT_TOKENS) || 2000;
+// Phase 14-3: the shared ANTHROPIC_LIVE_TIMEOUT_MS (60000) was too tight for the dev-qa
+// loop's round-3+ revision calls (a multi-thousand-token plan rewrite genuinely takes longer
+// to generate than a normal chat answer), causing repeated timeouts. Only dev-qa opts into
+// this longer timeout - /agent/ask and the writer-critic loop keep the default 60s.
+const DEV_QA_ANTHROPIC_TIMEOUT_MS = Number(process.env.COLLAB_ANTHROPIC_TIMEOUT_MS) || 120000;
 
 // Phase 14-1: generalized out of callCollabWriter/callCollabCritic so any two-agent role
 // pair (writer/critic, dev/qa, ...) can share the same provider-dispatch logic instead of
 // each pair hand-rolling its own modelProvider wiring. Only anthropic/lmstudio are wired
 // since those are the only providers any collab role has used so far.
-async function callTwoAgentRoleProvider({ provider, prompt, maxOutputTokens, modelCode, displayName }) {
+async function callTwoAgentRoleProvider({ provider, prompt, maxOutputTokens, modelCode, displayName, timeoutMsOverride }) {
   if (provider === 'anthropic') {
     const liveConfig = modelProvider.getAnthropicLiveConfig();
     const modelProfile = modelProvider.normalizeModelProfile({
@@ -1581,7 +1586,8 @@ async function callTwoAgentRoleProvider({ provider, prompt, maxOutputTokens, mod
     return modelProvider.callAnthropicLive({
       modelProfile,
       finalPrompt: prompt,
-      max_output_tokens_override: maxOutputTokens
+      max_output_tokens_override: maxOutputTokens,
+      timeout_ms_override: timeoutMsOverride || null
     });
   }
 
@@ -1672,7 +1678,8 @@ async function runTwoAgentLoop(db, { roleA, roleB, question, projectCode, maxRou
         prompt: promptA,
         maxOutputTokens: roleA.maxOutputTokens,
         modelCode: roleA.modelCode || `collab_${roleA.name}_${roleA.provider}`,
-        displayName: roleA.displayName || `Collab ${roleA.name} (${roleA.provider})`
+        displayName: roleA.displayName || `Collab ${roleA.name} (${roleA.provider})`,
+        timeoutMsOverride: roleA.timeoutMsOverride
       });
     } catch (error) {
       throw new Error(`${roleA.name}(${roleA.provider}) call failed at round ${roundNo}: ${error.message}`);
@@ -1705,7 +1712,8 @@ async function runTwoAgentLoop(db, { roleA, roleB, question, projectCode, maxRou
         prompt: promptB,
         maxOutputTokens: roleB.maxOutputTokens,
         modelCode: roleB.modelCode || `collab_${roleB.name}_${roleB.provider}`,
-        displayName: roleB.displayName || `Collab ${roleB.name} (${roleB.provider})`
+        displayName: roleB.displayName || `Collab ${roleB.name} (${roleB.provider})`,
+        timeoutMsOverride: roleB.timeoutMsOverride
       });
     } catch (error) {
       throw new Error(`${roleB.name}(${roleB.provider}) call failed at round ${roundNo}: ${error.message}`);
@@ -1811,6 +1819,7 @@ async function runDevQaPlan(db, { question, projectCode, maxRounds = 3 } = {}) {
       maxOutputTokens: DEV_QA_PLAN_MAX_OUTPUT_TOKENS,
       modelCode: 'dev_qa_dev_anthropic',
       displayName: 'Dev Plan Proposer (Anthropic)',
+      timeoutMsOverride: DEV_QA_ANTHROPIC_TIMEOUT_MS,
       promptBuilder: ({ question: q, previousContent, feedback }) =>
         buildDevProposalPrompt({ question: q, previousProposal: previousContent, feedback })
     },
@@ -1820,6 +1829,7 @@ async function runDevQaPlan(db, { question, projectCode, maxRounds = 3 } = {}) {
       maxOutputTokens: DEV_QA_REVIEW_MAX_OUTPUT_TOKENS,
       modelCode: 'dev_qa_qa_anthropic',
       displayName: 'Dev Plan QA Reviewer (Anthropic)',
+      timeoutMsOverride: DEV_QA_ANTHROPIC_TIMEOUT_MS,
       promptBuilder: ({ content }) => buildQaReviewPrompt({ proposal: content }),
       verdictParser: parseCriticVerdict
     },

@@ -870,7 +870,7 @@ function normalizeAnthropicApiError(error) {
   };
 }
 
-async function callAnthropicLive({ modelProfile, finalPrompt, system_context_text = "", tools = null, messages_override = null, max_output_tokens_override = null }) {
+async function callAnthropicLive({ modelProfile, finalPrompt, system_context_text = "", tools = null, messages_override = null, max_output_tokens_override = null, timeout_ms_override = null }) {
   const normalized = normalizeModelProfile(modelProfile);
   const safety = assertAnthropicLiveSafety({ modelProfile: normalized, finalPrompt });
 
@@ -902,6 +902,11 @@ async function callAnthropicLive({ modelProfile, finalPrompt, system_context_tex
     payload.tools = tools;
   }
 
+  // Same override mechanism as max_output_tokens_override above - callers whose prompts
+  // genuinely need longer than the shared ANTHROPIC_LIVE_TIMEOUT_MS (e.g. the dev-qa loop's
+  // multi-thousand-token revision rounds) can pass timeout_ms_override to raise the cap for
+  // just that call, without affecting /agent/ask or any other caller that doesn't pass it.
+  const timeoutMs = timeout_ms_override || liveConfig.timeout_ms;
   const response = await withTimeout(fetch(liveConfig.endpoint, {
     method: "POST",
     headers: {
@@ -910,7 +915,7 @@ async function callAnthropicLive({ modelProfile, finalPrompt, system_context_tex
       "anthropic-version": liveConfig.api_version
     },
     body: JSON.stringify(payload)
-  }), liveConfig.timeout_ms);
+  }), timeoutMs);
 
   const responseText = await response.text();
   let json = null;
