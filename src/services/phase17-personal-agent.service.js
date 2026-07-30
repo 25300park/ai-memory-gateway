@@ -382,6 +382,11 @@ async function ensureTables(db) {
   await ensureColumn(db, 'personal_agent_interactions', 'gateway_decision_payload', 'LONGTEXT NULL AFTER gateway_decision_reason');
   await ensureColumn(db, 'personal_agent_interactions', 'status', "VARCHAR(40) NULL AFTER used_context_sources");
   await ensureColumn(db, 'personal_agent_interactions', 'error_message', 'TEXT NULL AFTER status');
+  // Phase 14-7: bridges collab_rounds (writer-critic/dev-qa/plan-dev-qa loops) into this
+  // table so a loop's final result survives as a listable session, same as ask()'s turns.
+  // collab_rounds stays the audit trail of every round; this is just a one-row summary.
+  await ensureColumn(db, 'personal_agent_interactions', 'collab_session_id', 'VARCHAR(180) NULL AFTER agent_turn_no');
+  await ensureColumn(db, 'personal_agent_interactions', 'is_collab_summary', 'TINYINT(1) DEFAULT 0 AFTER collab_session_id');
   await ensureUniqueIndex(db, 'personal_agent_interactions', 'uniq_session_turn', ['agent_session_id', 'agent_turn_no']);
 
   await db.query(`
@@ -1631,6 +1636,43 @@ async function insertCollabRound(db, { collabSessionId, projectCode, roundNo, ro
   };
 }
 
+// Phase 14-7: called by the collab loop entry points (runWriterCriticLoop, runDevQaPlan,
+// runPlanDevQaPipeline) once the loop finishes, win or lose - collab_rounds already has
+// the full per-round audit trail, but it has no agent_session_id, so a loop's outcome was
+// otherwise invisible to /agent/sessions. This just writes one summary row using the same
+// schema ask() uses, marked via is_collab_summary + a "collab:<kind>" provider_used so it's
+// never confused with a real provider answer. Best-effort: a failure here must not break
+// the caller's actual loop result.
+async function saveCollabSummaryToInteractions(db, { agentSessionId, projectCode, question, finalAnswer, providerUsed, collabSessionId } = {}) {
+  try {
+    await ensureTables(db);
+    const resolvedSessionId = agentSessionId || buildAgentSessionId(projectCode, {});
+    const turnNo = await getNextAgentTurnNo(db, resolvedSessionId);
+    const [result] = await db.query(
+      `INSERT INTO personal_agent_interactions
+        (agent_session_id, agent_turn_no, collab_session_id, is_collab_summary, user_question, detected_project_code, provider_requested, provider_used, answer, answer_summary, save_status, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        resolvedSessionId,
+        turnNo,
+        collabSessionId || null,
+        1,
+        String(question || ''),
+        projectCode || null,
+        providerUsed || null,
+        providerUsed || null,
+        finalAnswer || null,
+        summarizeAnswer(finalAnswer || ''),
+        'collab_summary_saved',
+        'ok'
+      ]
+    );
+    return { ok: true, interaction_id: Number(result.insertId), agent_session_id: resolvedSessionId, agent_turn_no: turnNo };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+}
+
 // Phase 14-1: generalized from the original writer/critic-only loop. roleA proposes
 // content each round (round 1 gets no previousContent/feedback; later rounds get its own
 // previous output plus roleB's latest feedback), roleB reviews roleA's latest content and
@@ -1752,7 +1794,7 @@ async function runTwoAgentLoop(db, { roleA, roleB, question, projectCode, maxRou
 }
 
 async function runWriterCriticLoop(db, { question, projectCode, maxRounds = 3 } = {}) {
-  return runTwoAgentLoop(db, {
+  const loopResult = await runTwoAgentLoop(db, {
     roleA: {
       name: 'writer',
       provider: 'anthropic',
@@ -1778,6 +1820,16 @@ async function runWriterCriticLoop(db, { question, projectCode, maxRounds = 3 } 
     projectCode,
     maxRounds
   });
+
+  await saveCollabSummaryToInteractions(db, {
+    projectCode: loopResult.project_code,
+    question,
+    finalAnswer: loopResult.final_content,
+    providerUsed: 'collab:writer-critic',
+    collabSessionId: loopResult.collab_session_id
+  });
+
+  return loopResult;
 }
 
 // Phase 14-1: dev proposes a concrete change plan (files/how/why - no code), qa reviews it
@@ -1848,6 +1900,14 @@ async function runDevQaLoop(db, { question, projectCode, maxRounds = 3, collabSe
 
 async function runDevQaPlan(db, { question, projectCode, maxRounds = 3 } = {}) {
   const loopResult = await runDevQaLoop(db, { question, projectCode, maxRounds });
+
+  await saveCollabSummaryToInteractions(db, {
+    projectCode: loopResult.project_code,
+    question,
+    finalAnswer: loopResult.final_content,
+    providerUsed: 'collab:dev-qa',
+    collabSessionId: loopResult.collab_session_id
+  });
 
   // Registration only, per Phase 6-4/6-5's propose/approve queue - never executed
   // automatically. Recorded regardless of final_verdict (not just when approved) so a human
@@ -1954,6 +2014,14 @@ async function runPlanDevQaPipeline(db, { question, projectCode, maxRounds = 3 }
     question: plannerOutput,
     projectCode: detected.detected_project_code,
     maxRounds,
+    collabSessionId
+  });
+
+  await saveCollabSummaryToInteractions(db, {
+    projectCode: devQaResult.project_code,
+    question: trimmedQuestion,
+    finalAnswer: devQaResult.final_content,
+    providerUsed: 'collab:plan-dev-qa',
     collabSessionId
   });
 
@@ -2623,6 +2691,7 @@ module.exports = {
   runWriterCriticLoop,
   runDevQaPlan,
   runPlanDevQaPipeline,
+  saveCollabSummaryToInteractions,
   inferGatewayQuestionType,
   buildGatewayProviderDecision,
   saveAgentConversationLog,
