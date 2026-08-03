@@ -1,10 +1,11 @@
 const { fail } = require("../utils/response.util");
 const { isDbConnectionError, buildDbConnectionErrorMessage } = require("../utils/db-error-hint.util");
+const { maskUrlToken } = require("../utils/mask-url.util");
 
 function notFoundHandler(req, res, next) {
   return fail(res, {
     code: "ROUTE_NOT_FOUND",
-    message: `Route not found: ${req.method} ${req.originalUrl}`,
+    message: `Route not found: ${req.method} ${maskUrlToken(req.originalUrl)}`,
     statusCode: 404,
     details: {
       request_id: req.requestId || null
@@ -18,7 +19,7 @@ function errorHandler(error, req, res, next) {
   console.error("Unhandled error:", {
     request_id: req.requestId || null,
     method: req.method,
-    url: req.originalUrl,
+    url: maskUrlToken(req.originalUrl),
     code: error.code || null,
     message: error.message,
     stack: error.stack

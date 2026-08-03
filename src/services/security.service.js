@@ -36,16 +36,18 @@ function tokenFingerprint(value) {
   return crypto.createHash("sha256").update(String(value)).digest("hex").slice(0, 12);
 }
 
-function extractAdminToken(req) {
+function extractAdminToken(req, { allowQuery = true } = {}) {
   const headerValue = req.headers?.["x-admin-token"];
-  const queryValue = req.query?.token;
 
   if (typeof headerValue === "string" && headerValue.trim()) {
     return { value: headerValue.trim(), source: "header:x-admin-token" };
   }
 
-  if (typeof queryValue === "string" && queryValue.trim()) {
-    return { value: queryValue.trim(), source: "query:token" };
+  if (allowQuery) {
+    const queryValue = req.query?.token;
+    if (typeof queryValue === "string" && queryValue.trim()) {
+      return { value: queryValue.trim(), source: "query:token" };
+    }
   }
 
   return { value: "", source: "missing" };
@@ -86,7 +88,11 @@ function validateAdminToken(token) {
     };
   }
 
-  const matched = configuredTokens.find((entry) => entry.value === token);
+  const tokenBuffer = Buffer.from(token);
+  const matched = configuredTokens.find((entry) => {
+    const entryBuffer = Buffer.from(entry.value);
+    return entryBuffer.length === tokenBuffer.length && crypto.timingSafeEqual(entryBuffer, tokenBuffer);
+  });
 
   if (!matched) {
     return {

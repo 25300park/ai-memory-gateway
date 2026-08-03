@@ -7,7 +7,7 @@ const { getRoleForTokenLabel } = require("../services/admin-permission.service")
 const { sendStandardError } = require("../services/api-error.service");
 
 async function adminApiAuthMiddleware(req, res, next) {
-  const { value: token, source } = extractAdminToken(req);
+  const { value: token, source } = extractAdminToken(req, { allowQuery: false });
   const result = validateAdminToken(token);
 
   if (result.ok) {

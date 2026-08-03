@@ -1,4 +1,5 @@
 const crypto = require("crypto");
+const { maskUrlToken } = require("../utils/mask-url.util");
 
 function requestLogger(req, res, next) {
   const requestId = crypto.randomUUID();
@@ -12,7 +13,7 @@ function requestLogger(req, res, next) {
     const log = {
       request_id: requestId,
       method: req.method,
-      url: req.originalUrl,
+      url: maskUrlToken(req.originalUrl),
       status_code: res.statusCode,
       duration_ms: durationMs,
       ip: req.ip,
