@@ -4,6 +4,7 @@ const {
   hasPermission,
   logAdminPermissionEvent
 } = require("./admin-permission.service");
+const { maskUrlToken } = require("../utils/mask-url.util");
 
 let dangerousEventsTableReady = false;
 
@@ -212,7 +213,7 @@ async function logDangerousActionEvent({ req, actionKey, action, outcome, reason
       matched ? 1 : 0,
       reason || null,
       req?.method || null,
-      req?.originalUrl || req?.url || null,
+      maskUrlToken(req?.originalUrl || req?.url) || null,
       req?.requestId || req?.headers?.["x-request-id"] || null
     ]);
   } catch (error) {

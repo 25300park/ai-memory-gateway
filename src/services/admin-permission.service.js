@@ -1,4 +1,5 @@
 const pool = require("../config/db");
+const { maskUrlToken } = require("../utils/mask-url.util");
 
 let permissionEventsTableReady = false;
 
@@ -213,7 +214,7 @@ async function logAdminPermissionEvent({ req, outcome, role, permission, event_t
       req?.adminAuth?.token_label || null,
       req?.adminAuth?.token_fingerprint || null,
       req?.method || null,
-      req?.originalUrl || req?.url || null,
+      maskUrlToken(req?.originalUrl || req?.url) || null,
       req?.requestId || req?.headers?.["x-request-id"] || null
     ]);
   } catch (error) {
