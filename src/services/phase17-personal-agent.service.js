@@ -452,17 +452,35 @@ async function ensureTables(db) {
 
 // Phase 6-1: returns every active guideline for a project, merged into one text block so
 // callers (buildProviderPrompt) can drop it straight into the prompt as a single section.
+// Phase 16-1: also pulls in project_code='_global' guidelines - ones meant to apply to every
+// project regardless of detection - and places them in their own section ahead of the
+// project-specific one, since a global working principle is more fundamental than a
+// per-project rule. Section headers are baked in here (rather than left to the caller) so a
+// project with only global guidelines, only project guidelines, both, or neither all render
+// correctly without the caller needing to know which case it is.
 async function getActiveGuidelines(db, projectCode) {
   if (!(await tableExists(db, 'project_guidelines'))) return '';
   const [rows] = await db.query(
-    `SELECT title, content
+    `SELECT project_code, title, content
      FROM project_guidelines
-     WHERE project_code = ? AND is_active = 1
+     WHERE is_active = 1 AND (project_code = ? OR project_code = '_global')
      ORDER BY id ASC`,
     [projectCode]
   );
   if (!rows.length) return '';
-  return rows.map((r) => (r.title ? `[${r.title}]\n${r.content}` : r.content)).join('\n\n');
+
+  const formatRows = (list) => list.map((r) => (r.title ? `[${r.title}]\n${r.content}` : r.content)).join('\n\n');
+
+  const globalRows = rows.filter((r) => r.project_code === '_global');
+  // '_global' itself is never a real detected project_code - guard against double-counting
+  // the same rows in both sections if it were ever passed in as projectCode.
+  const projectRows = projectCode === '_global' ? [] : rows.filter((r) => r.project_code === projectCode);
+
+  const sections = [];
+  if (globalRows.length) sections.push(`=== 전역 작업 원칙 (항상 적용) ===\n${formatRows(globalRows)}`);
+  if (projectRows.length) sections.push(`=== 프로젝트 지침 (항상 적용) ===\n${formatRows(projectRows)}`);
+
+  return sections.join('\n\n');
 }
 
 async function addProjectGuideline(db, { project_code, title, content }) {
@@ -1161,9 +1179,11 @@ function buildMockAnswer(question, projectCode, context) {
 function buildProviderPrompt({ question, projectCode, context, detection }) {
   // Guidelines are a fixed, always-applied section, distinct from the searched memory below -
   // they don't depend on this question's keywords, so a project with none skips the section
-  // entirely rather than emitting an empty header.
+  // entirely rather than emitting an empty header. getActiveGuidelines() already bakes in the
+  // "전역 작업 원칙" / "프로젝트 지침" headers (global section first) so this just drops the
+  // text in as-is.
   const guidelinesSection = context?.guidelines_text
-    ? ['=== 프로젝트 지침 (항상 적용) ===', context.guidelines_text, '']
+    ? [context.guidelines_text, '']
     : [];
 
   return [
@@ -1171,7 +1191,7 @@ function buildProviderPrompt({ question, projectCode, context, detection }) {
     'Answer in Korean unless the user explicitly asks for another language.',
     'Use the memory context below as the continuity source of truth.',
     'Do not claim that context exists if it is not shown.',
-    'If a "프로젝트 지침" section is present, always follow it - it takes priority over the searched memory context.',
+    'If a "전역 작업 원칙" or "프로젝트 지침" section is present, always follow it - these take priority over the searched memory context.',
     '',
     `Detected project_code: ${projectCode}`,
     `Detection reason: ${detection?.detection_reason || ''}`,
