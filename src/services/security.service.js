@@ -1,5 +1,6 @@
 const crypto = require("crypto");
 const pool = require("../config/db");
+const { maskUrlToken } = require("../utils/mask-url.util");
 
 let adminSecurityEventsTableReady = false;
 
@@ -161,7 +162,7 @@ async function logAdminSecurityEvent({ req, event_type = "admin_api_auth", outco
       token_fingerprint || null,
       req?.ip || req?.socket?.remoteAddress || null,
       req?.method || null,
-      req?.originalUrl || req?.url || null,
+      maskUrlToken(req?.originalUrl || req?.url) || null,
       req?.headers?.["user-agent"] || null,
       req?.requestId || req?.headers?.["x-request-id"] || null
     ]);

@@ -1,3 +1,5 @@
+const { maskUrlToken } = require("../utils/mask-url.util");
+
 const ERROR_CATALOG = [
   {
     code: "VALIDATION_ERROR",
@@ -124,7 +126,7 @@ function buildStandardError({
       http_status: resolvedStatusCode,
       request_id: getRequestId(req),
       timestamp: nowIso(),
-      path: req?.originalUrl || req?.url || null,
+      path: maskUrlToken(req?.originalUrl || req?.url) || null,
       method: req?.method || null,
       source: source || null,
       operator_action: hint || catalog.operator_action || null,
