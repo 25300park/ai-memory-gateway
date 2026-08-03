@@ -14,8 +14,8 @@
 const fs = require('fs');
 const path = require('path');
 
-const RESULTS_DIR = path.join(__dirname, '..', 'results');
-const REPORTS_DIR = path.join(__dirname, '..', 'docs', 'eval-reports');
+const RESULTS_DIR = process.env.RESULTS_DIR || path.join(__dirname, '..', 'results');
+const REPORTS_DIR = process.env.REPORTS_DIR || path.join(__dirname, '..', 'docs', 'eval-reports');
 
 const CATEGORY_ORDER = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
 const VERDICTS = ['pass', 'fail', 'inconclusive', 'skipped'];

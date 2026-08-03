@@ -14,7 +14,7 @@ const fs = require('fs');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
-const RESULTS_DIR = path.join(__dirname, '..', 'results');
+const RESULTS_DIR = process.env.RESULTS_DIR || path.join(__dirname, '..', 'results');
 const QUESTIONS_PATH = path.join(__dirname, 'eval-questions.json');
 
 // Phase 1: any answer/error text matching these means the provider itself

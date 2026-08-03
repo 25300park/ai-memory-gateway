@@ -19,7 +19,7 @@ const path = require('path');
 const { loadEnv, callAgentAsk, callAgentCollab } = require('./lib/api-client');
 
 const QUESTIONS_PATH = path.join(__dirname, 'eval-questions.json');
-const RESULTS_DIR = path.join(__dirname, '..', 'results');
+const RESULTS_DIR = process.env.RESULTS_DIR || path.join(__dirname, '..', 'results');
 const DELAY_BETWEEN_QUESTIONS_MS = 1000;
 
 const { baseUrl } = loadEnv();

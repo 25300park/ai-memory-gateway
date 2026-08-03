@@ -27,8 +27,8 @@ const { spawnSync } = require('child_process');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
 const ROOT_DIR = path.join(__dirname, '..');
-const RESULTS_DIR = path.join(ROOT_DIR, 'results');
-const LOG_PATH = path.join(ROOT_DIR, 'logs', 'weekly-eval.log');
+const RESULTS_DIR = process.env.RESULTS_DIR || path.join(ROOT_DIR, 'results');
+const LOG_PATH = path.join(process.env.LOGS_DIR || path.join(ROOT_DIR, 'logs'), 'weekly-eval.log');
 const baseUrl = process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 3010}`;
 
 function timestamp() {
