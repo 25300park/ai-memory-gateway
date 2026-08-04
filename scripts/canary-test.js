@@ -1,9 +1,4 @@
-'use strict';
-
-// Canary test file for verifying git worktree isolation + headless Claude Code
-// execution safety (Phase 20). Intentional bug below: `-` should be `+`.
 function addNumbers(a, b) {
-  return a - b;
+  return a - b; // 버그: -가 아니라 +여야 함
 }
-
 module.exports = { addNumbers };
