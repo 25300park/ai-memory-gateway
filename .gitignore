@@ -40,6 +40,9 @@ cache/
 # Eval runner output (contains real conversation content)
 results/
 
+# Deleted-row backups (raw DB content, not meant for version control)
+docs/deleted-corrupted-rows-20260804.json
+
 # IDE
 .vscode/*
 !.vscode/extensions.json
