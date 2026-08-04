@@ -10,6 +10,7 @@ const summaryQueueLinkService = require('../services/phase15-summary-queue-link.
 const importMemorySearchService = require('../services/phase15-import-memory-search.service');
 const geminiClaudeImporterService = require('../services/gemini-claude-importer.service');
 const pendingActionsService = require('../services/pending-actions.service');
+const codeExecutionService = require('../services/code-execution.service');
 const { sendStandardError } = require('../services/api-error.service');
 const { isDbConnectionError, buildDbConnectionErrorMessage } = require('../utils/db-error-hint.util');
 
@@ -282,6 +283,42 @@ router.post('/agent/actions/:id/execute', asyncHandler(async (req, res) => {
       source: 'ai.routes:/agent/actions/:id/execute'
     });
   }
+  res.json(result);
+}));
+
+// -----------------------------------------------------------------------------
+// Phase 12-2: headless code execution for approved code_change_proposal rows -
+// isolated git worktree only, diff captured back to the DB, never merged automatically.
+// -----------------------------------------------------------------------------
+router.post('/agent/actions/:id/execute-code', asyncHandler(async (req, res) => {
+  const repoPath = req.body?.repoPath || codeExecutionService.ALLOWED_REPO_PATHS[0];
+
+  if (!codeExecutionService.isAllowedRepoPath(repoPath)) {
+    return sendStandardError(res, {
+      req,
+      code: 'VALIDATION_ERROR',
+      message: `repoPath "${repoPath}" is not in the allowed list.`,
+      statusCode: 400,
+      source: 'ai.routes:/agent/actions/:id/execute-code'
+    });
+  }
+
+  const result = await codeExecutionService.executeCodeChangeProposal(db, {
+    pendingActionId: req.params.id,
+    instruction: req.body?.instruction,
+    repoPath
+  });
+
+  if (!result.ok && result.http_status) {
+    return sendStandardError(res, {
+      req,
+      code: result.http_status === 404 ? 'PENDING_ACTION_NOT_FOUND' : 'VALIDATION_ERROR',
+      message: result.error,
+      statusCode: result.http_status,
+      source: 'ai.routes:/agent/actions/:id/execute-code'
+    });
+  }
+
   res.json(result);
 }));
 
