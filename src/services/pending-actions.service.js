@@ -35,6 +35,18 @@ async function ensurePendingActionsTable(db) {
     )
   `);
 
+  // Phase 12-2 added this column lazily (only when code-execution.service.js's own
+  // executeCodeChangeProposal ran at least once). listPendingActions/getPendingActionById
+  // now always SELECT it, so it must exist unconditionally here too - otherwise a fresh DB
+  // that never ran a code execution would 500 on the very first GET /agent/actions.
+  const [diffColumnRows] = await db.query(
+    `SELECT COUNT(*) AS cnt FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name = 'pending_actions' AND column_name = 'diff_result'`
+  );
+  if (Number(diffColumnRows[0]?.cnt || 0) === 0) {
+    await db.query(`ALTER TABLE pending_actions ADD COLUMN diff_result LONGTEXT NULL AFTER review_note`);
+  }
+
   tableReady = true;
 }
 
@@ -106,7 +118,7 @@ async function listPendingActions(db, { project_code, status } = {}) {
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
   const [rows] = await db.query(
-    `SELECT id, project_code, agent_session_id, action_type, payload, status, proposed_by, created_at, reviewed_at, review_note
+    `SELECT id, project_code, agent_session_id, action_type, payload, status, proposed_by, created_at, reviewed_at, review_note, diff_result
      FROM pending_actions
      ${whereSql}
      ORDER BY id DESC
@@ -121,7 +133,7 @@ async function getPendingActionById(db, id) {
   await ensurePendingActionsTable(db);
 
   const [rows] = await db.query(
-    `SELECT id, project_code, agent_session_id, action_type, payload, status, proposed_by, created_at, reviewed_at, review_note
+    `SELECT id, project_code, agent_session_id, action_type, payload, status, proposed_by, created_at, reviewed_at, review_note, diff_result
      FROM pending_actions
      WHERE id = ?`,
     [id]
