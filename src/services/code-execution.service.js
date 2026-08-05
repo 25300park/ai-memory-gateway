@@ -8,13 +8,21 @@
  * Phase 12-4: the CLI itself is now pluggable via `engine` ('claude' | 'codex', default
  * 'claude') - the worktree/spawn/diff-capture/cleanup logic is engine-agnostic and fully
  * reused, only the command line differs:
- *   - claude: `claude -p "<instruction>" --dangerously-skip-permissions`
- *   - codex:  `codex exec --sandbox workspace-write --ask-for-approval never "<instruction>"`
+ *   - claude: `claude -p --dangerously-skip-permissions`
+ *   - codex:  `codex exec --sandbox workspace-write --ask-for-approval never`
  *     (codex's `--full-auto` is a deprecated compatibility flag per OpenAI's docs -
  *     `--sandbox workspace-write` + `--ask-for-approval never` is the current no-prompt,
  *     write-enabled combination: https://learn.chatgpt.com/docs/non-interactive-mode.
  *     Verified via docs, not `codex --help`, since codex isn't installed on this machine
  *     as of Phase 12-4 - call checkEngineAvailability() before relying on engine:'codex'.)
+ *
+ * Phase 12-5: the instruction is piped over stdin rather than embedded in the command
+ * line - cmd.exe (spawned via shell:true on Windows) treats a literal newline as a command
+ * separator, so a multi-line instruction (e.g. anything auto-generated from a dev/team
+ * plan - see pending-actions.service.js's autoCreateCodeChangeProposal) got silently
+ * truncated at the first line before the CLI ever saw the rest of it. Confirmed via direct
+ * reproduction, not just inference. Both engines' CLIs read the prompt from stdin when it
+ * is omitted as a positional argument.
  *
  * This never merges anything into the real branch - the worktree's branch is left behind
  * (not deleted) so a human can inspect/merge it manually via normal git commands. The
@@ -39,12 +47,11 @@ const DEFAULT_ENGINE = 'claude';
 
 let executionInProgress = false;
 
-function buildCommand(engine, instruction) {
-  const quotedInstruction = `"${String(instruction).replace(/"/g, '\\"')}"`;
+function buildCommand(engine) {
   if (engine === 'codex') {
-    return `codex exec --sandbox workspace-write --ask-for-approval never ${quotedInstruction}`;
+    return 'codex exec --sandbox workspace-write --ask-for-approval never';
   }
-  return `claude -p ${quotedInstruction} --dangerously-skip-permissions`;
+  return 'claude -p --dangerously-skip-permissions';
 }
 
 function isAllowedRepoPath(repoPath) {
@@ -104,7 +111,7 @@ function killProcessTree(pid) {
 
 function runEngineHeadless({ engine, worktreePath, instruction, timeoutMs }) {
   return new Promise((resolve) => {
-    const command = buildCommand(engine, instruction);
+    const command = buildCommand(engine);
 
     const child = spawn(command, {
       cwd: worktreePath,
@@ -138,6 +145,11 @@ function runEngineHeadless({ engine, worktreePath, instruction, timeoutMs }) {
       clearTimeout(timer);
       resolve({ exitCode: null, stdout, stderr: `${stderr}\n${error.message}`, timedOut });
     });
+
+    // See the Phase 12-5 file header note - piping via stdin instead of the command line
+    // avoids cmd.exe's newline-as-command-separator truncation entirely.
+    child.stdin.write(String(instruction));
+    child.stdin.end();
   });
 }
 
