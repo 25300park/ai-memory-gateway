@@ -9,6 +9,7 @@ const db = require('../config/db');
 const summaryQueueLinkService = require('../services/phase15-summary-queue-link.service');
 const importMemorySearchService = require('../services/phase15-import-memory-search.service');
 const geminiClaudeImporterService = require('../services/gemini-claude-importer.service');
+const chatgptExportImporterService = require('../services/chatgpt-export-importer.service');
 const pendingActionsService = require('../services/pending-actions.service');
 const codeExecutionService = require('../services/code-execution.service');
 const { sendStandardError } = require('../services/api-error.service');
@@ -409,6 +410,30 @@ router.post('/imports/gemini-claude/test', asyncHandler(async (req, res) => {
 
 router.post('/imports/gemini-claude/import', asyncHandler(async (req, res) => {
   res.json(await geminiClaudeImporterService.importGeminiClaudeExport(req.body || {}));
+}));
+
+// -----------------------------------------------------------------------------
+// Phase 15-2 route recovery: ChatGPT Export Importer - these functions existed since
+// Phase 15-2 but were never wired to a route (dashboard.js has always called them though,
+// so this was a silent 404 for anyone using the ChatGPT importer panel).
+// -----------------------------------------------------------------------------
+router.get('/imports/chatgpt/status', asyncHandler(async (req, res) => {
+  res.json(await chatgptExportImporterService.getChatGPTImporterStatus());
+}));
+
+router.get('/imports/chatgpt/checklist', asyncHandler(async (req, res) => {
+  // dashboard.js reads response.checklist (see renderChatGPTImporterChecklist) - wrap the
+  // bare array the same way the gemini-claude checklist route does, rather than returning
+  // getChatGPTImporterChecklist()'s array directly.
+  res.json({ ok: true, phase: '15-2', checklist: chatgptExportImporterService.getChatGPTImporterChecklist() });
+}));
+
+router.post('/imports/chatgpt/test', asyncHandler(async (req, res) => {
+  res.json(await chatgptExportImporterService.runChatGPTImporterTest(req.body || {}));
+}));
+
+router.post('/imports/chatgpt/import', asyncHandler(async (req, res) => {
+  res.json(await chatgptExportImporterService.importChatGPTExportFromZip(req.body || {}));
 }));
 
 module.exports = router;
