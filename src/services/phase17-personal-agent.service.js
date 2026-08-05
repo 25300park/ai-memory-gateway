@@ -557,6 +557,48 @@ async function addProjectRule(db, { project_code, label, keywords }) {
   return { id: result.insertId, project_code: projectCode, label: label ? String(label).trim() : projectCode, keywords: keywordList, is_active: 1 };
 }
 
+// Phase 19-1: creates the project and, if a guidelines array is provided, saves each one
+// right after - not a real DB transaction (project_guidelines writes go through the
+// existing addProjectGuideline() one row at a time), so a failure partway through leaves
+// the project row intact rather than rolling it back. The response always says exactly
+// which guidelines saved and which didn't, so "project created, guidelines partly failed"
+// is never silently swallowed into a plain success.
+async function addProjectRuleWithGuidelines(db, { project_code, label, keywords, guidelines } = {}) {
+  const project = await addProjectRule(db, { project_code, label, keywords });
+
+  if (!Array.isArray(guidelines) || guidelines.length === 0) {
+    return { project, guidelines_result: null };
+  }
+
+  const saved = [];
+  const failed = [];
+
+  for (const g of guidelines) {
+    const title = g?.title ? String(g.title).trim() : null;
+    const content = g?.content ? String(g.content).trim() : '';
+    if (!content) {
+      failed.push({ title, error: 'content is required' });
+      continue;
+    }
+    try {
+      const savedGuideline = await addProjectGuideline(db, { project_code: project.project_code, title, content });
+      saved.push(savedGuideline);
+    } catch (error) {
+      failed.push({ title, error: error.message });
+    }
+  }
+
+  return {
+    project,
+    guidelines_result: {
+      ok: failed.length === 0,
+      requested: guidelines.length,
+      saved,
+      failed
+    }
+  };
+}
+
 async function updateProjectRule(db, projectCode, { label, keywords }) {
   await ensureTables(db);
   const code = String(projectCode || '').trim();
@@ -1993,6 +2035,78 @@ async function callPlanner(prompt) {
   });
 }
 
+// Phase 19-1: turns a free-text department/project description into 3-5 structured
+// project_guidelines rows (title + content), for the project-creation UI flow of
+// "write a paragraph, let the AI break it into concrete guidelines".
+const GUIDELINE_DECOMPOSER_MAX_OUTPUT_TOKENS = Number(process.env.GUIDELINE_DECOMPOSER_MAX_OUTPUT_TOKENS) || 2000;
+
+function buildGuidelineDecompositionPrompt(description) {
+  return [
+    '다음은 한 부서/프로젝트의 역할, 톤, 원칙에 대한 자유 서술입니다.',
+    '이걸 실행 가능한 개별 지침 3~5개로 나눠서, 각각 title(10자 내외)과 content(구체적 지침 문장)로 JSON 배열로만 응답하세요.',
+    '설명이나 다른 텍스트 없이 JSON만 출력하세요.',
+    '형식: [{"title": "...", "content": "..."}]',
+    '',
+    `서술: ${description}`
+  ].join('\n');
+}
+
+// Anthropic wraps JSON answers in a ```json fence more often than not despite being told
+// not to - strip that before parsing rather than treating it as a parse failure.
+function parseGuidelineDecomposerOutput(rawText) {
+  const stripped = String(rawText || '')
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/```\s*$/, '')
+    .trim();
+
+  let parsed;
+  try {
+    parsed = JSON.parse(stripped);
+  } catch (_) {
+    return null;
+  }
+
+  if (!Array.isArray(parsed) || parsed.length === 0) return null;
+
+  const guidelines = parsed
+    .filter((item) => item && typeof item.title === 'string' && typeof item.content === 'string' && item.title.trim() && item.content.trim())
+    .map((item) => ({ title: item.title.trim(), content: item.content.trim() }));
+
+  return guidelines.length ? guidelines : null;
+}
+
+// One retry on a parse failure (not on a provider/network error - callTwoAgentRoleProvider
+// already throws for those) before giving up with a clear error, since a single malformed
+// JSON response is common enough with free-form prompts to be worth one more attempt.
+async function callGuidelineDecomposer(description) {
+  const trimmedDescription = String(description || '').trim();
+  if (!trimmedDescription) throw new Error('description is required');
+
+  const prompt = buildGuidelineDecompositionPrompt(trimmedDescription);
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const response = await callTwoAgentRoleProvider({
+      provider: 'anthropic',
+      prompt,
+      maxOutputTokens: GUIDELINE_DECOMPOSER_MAX_OUTPUT_TOKENS,
+      modelCode: 'guideline_decomposer_anthropic',
+      displayName: 'Guideline Decomposer (Anthropic)',
+      timeoutMsOverride: DEV_QA_ANTHROPIC_TIMEOUT_MS
+    });
+
+    const guidelines = parseGuidelineDecomposerOutput(extractProviderAnswer(response));
+    if (guidelines) return guidelines;
+
+    if (attempt === 2) {
+      throw new Error('AI가 지침을 JSON 형식으로 응답하지 않았습니다 (2회 시도 실패). description을 더 구체적으로 작성해서 다시 시도해주세요.');
+    }
+  }
+
+  // Unreachable, but keeps the function's return type honest for linters.
+  throw new Error('AI가 지침을 JSON 형식으로 응답하지 않았습니다.');
+}
+
 // Phase 14-4: 3-role pipeline - planner concretizes the request (round_no: 0), then the
 // existing dev-qa loop runs against the planner's output instead of the user's raw text.
 // All three roles share one collab_session_id so the console can show them as one thread.
@@ -2700,10 +2814,12 @@ module.exports = {
   getStatus,
   getProjectRules,
   addProjectRule,
+  addProjectRuleWithGuidelines,
   updateProjectRule,
   getActiveGuidelines,
   addProjectGuideline,
   listProjectGuidelines,
+  callGuidelineDecomposer,
   detectProject,
   searchMemoryContext,
   executeProviderAnswer,

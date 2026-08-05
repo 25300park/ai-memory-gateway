@@ -44,8 +44,26 @@ router.get('/agent/projects', asyncHandler(async (req, res) => {
 }));
 
 router.post('/agent/projects', asyncHandler(async (req, res) => {
-  const project = await personalAgent.addProjectRule(db, req.body || {});
-  res.json({ ok: true, project });
+  const { guidelines_result, project } = await personalAgent.addProjectRuleWithGuidelines(db, req.body || {});
+  res.json({ ok: true, project, guidelines_result });
+}));
+
+// Phase 19-1: preview-only - decomposes a free-text department/project description into
+// 3-5 {title, content} guidelines via a single Anthropic call. Never touches the DB; the
+// caller re-submits the result (possibly edited) to POST /agent/projects as `guidelines`.
+router.post('/agent/projects/draft-guidelines', asyncHandler(async (req, res) => {
+  try {
+    const guidelines = await personalAgent.callGuidelineDecomposer(req.body?.description);
+    res.json({ ok: true, guidelines });
+  } catch (error) {
+    return sendStandardError(res, {
+      req,
+      code: 'PROVIDER_CALL_FAILED',
+      message: error.message,
+      statusCode: 502,
+      source: 'ai.routes:/agent/projects/draft-guidelines'
+    });
+  }
 }));
 
 router.put('/agent/projects/:code', asyncHandler(async (req, res) => {
