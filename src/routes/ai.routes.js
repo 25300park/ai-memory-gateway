@@ -306,7 +306,8 @@ router.post('/agent/actions/:id/execute-code', asyncHandler(async (req, res) => 
   const result = await codeExecutionService.executeCodeChangeProposal(db, {
     pendingActionId: req.params.id,
     instruction: req.body?.instruction,
-    repoPath
+    repoPath,
+    engine: req.body?.engine
   });
 
   if (!result.ok && result.http_status) {

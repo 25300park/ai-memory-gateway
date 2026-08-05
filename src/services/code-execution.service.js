@@ -2,8 +2,19 @@
 
 /**
  * Phase 12-2: executes an approved code_change_proposal from pending_actions inside an
- * isolated git worktree, driving headless Claude Code (`claude -p ... --dangerously-skip-permissions`)
- * to make the change, then captures the resulting diff back onto the pending_actions row.
+ * isolated git worktree, driving a headless coding agent CLI to make the change, then
+ * captures the resulting diff back onto the pending_actions row.
+ *
+ * Phase 12-4: the CLI itself is now pluggable via `engine` ('claude' | 'codex', default
+ * 'claude') - the worktree/spawn/diff-capture/cleanup logic is engine-agnostic and fully
+ * reused, only the command line differs:
+ *   - claude: `claude -p "<instruction>" --dangerously-skip-permissions`
+ *   - codex:  `codex exec --sandbox workspace-write --ask-for-approval never "<instruction>"`
+ *     (codex's `--full-auto` is a deprecated compatibility flag per OpenAI's docs -
+ *     `--sandbox workspace-write` + `--ask-for-approval never` is the current no-prompt,
+ *     write-enabled combination: https://learn.chatgpt.com/docs/non-interactive-mode.
+ *     Verified via docs, not `codex --help`, since codex isn't installed on this machine
+ *     as of Phase 12-4 - call checkEngineAvailability() before relying on engine:'codex'.)
  *
  * This never merges anything into the real branch - the worktree's branch is left behind
  * (not deleted) so a human can inspect/merge it manually via normal git commands. The
@@ -23,11 +34,39 @@ const ALLOWED_REPO_PATHS = ['D:\\00. Ai_Memory_System\\api'].map((p) => path.res
 const DEFAULT_TIMEOUT_MS = Number(process.env.CODE_EXECUTION_TIMEOUT_MS) || 5 * 60 * 1000;
 const MAX_CAPTURED_OUTPUT_CHARS = 5000;
 
+const ENGINES = ['claude', 'codex'];
+const DEFAULT_ENGINE = 'claude';
+
 let executionInProgress = false;
+
+function buildCommand(engine, instruction) {
+  const quotedInstruction = `"${String(instruction).replace(/"/g, '\\"')}"`;
+  if (engine === 'codex') {
+    return `codex exec --sandbox workspace-write --ask-for-approval never ${quotedInstruction}`;
+  }
+  return `claude -p ${quotedInstruction} --dangerously-skip-permissions`;
+}
 
 function isAllowedRepoPath(repoPath) {
   if (!repoPath) return false;
   return ALLOWED_REPO_PATHS.includes(path.resolve(repoPath).toLowerCase());
+}
+
+// Best-effort presence check for each engine's CLI (`<engine> --version`) - lets a caller
+// (status endpoint, or this file's own manual test script) find out which engines are
+// actually usable on this machine before attempting execute-code with one of them.
+function checkEngineAvailability() {
+  const result = {};
+  for (const engine of ENGINES) {
+    const binary = engine === 'codex' ? 'codex' : 'claude';
+    try {
+      const version = execSync(`${binary} --version`, { stdio: 'pipe' }).toString().trim();
+      result[engine] = { installed: true, version };
+    } catch (error) {
+      result[engine] = { installed: false, error: error.message };
+    }
+  }
+  return result;
 }
 
 function truncate(text, max = MAX_CAPTURED_OUTPUT_CHARS) {
@@ -52,8 +91,8 @@ function worktreePathFor(repoPath, branchName) {
   return path.join(parentDir, `${repoName}-worktrees`, branchName);
 }
 
-// Kills the whole process tree, not just the immediate PID - claude -p may itself spawn
-// children, and a plain child.kill() on Windows does not reach those.
+// Kills the whole process tree, not just the immediate PID - the engine CLI may itself
+// spawn children, and a plain child.kill() on Windows does not reach those.
 function killProcessTree(pid) {
   try {
     execSync(`taskkill /pid ${pid} /t /f`, { stdio: 'ignore' });
@@ -63,10 +102,9 @@ function killProcessTree(pid) {
   }
 }
 
-function runClaudeHeadless({ worktreePath, instruction, timeoutMs }) {
+function runEngineHeadless({ engine, worktreePath, instruction, timeoutMs }) {
   return new Promise((resolve) => {
-    const quotedInstruction = `"${String(instruction).replace(/"/g, '\\"')}"`;
-    const command = `claude -p ${quotedInstruction} --dangerously-skip-permissions`;
+    const command = buildCommand(engine, instruction);
 
     const child = spawn(command, {
       cwd: worktreePath,
@@ -103,12 +141,17 @@ function runClaudeHeadless({ worktreePath, instruction, timeoutMs }) {
   });
 }
 
-async function executeCodeChangeProposal(db, { pendingActionId, instruction, repoPath }) {
+async function executeCodeChangeProposal(db, { pendingActionId, instruction, repoPath, engine = DEFAULT_ENGINE }) {
   await ensureDiffResultColumn(db);
 
   const numericId = Number(pendingActionId);
   if (!Number.isInteger(numericId) || numericId <= 0) {
     return { ok: false, http_status: 400, error: `Invalid pendingActionId "${pendingActionId}".` };
+  }
+
+  const resolvedEngine = String(engine || DEFAULT_ENGINE).toLowerCase();
+  if (!ENGINES.includes(resolvedEngine)) {
+    return { ok: false, http_status: 400, error: `Unsupported engine "${engine}". Must be one of: ${ENGINES.join(', ')}.` };
   }
 
   if (!isAllowedRepoPath(repoPath)) {
@@ -145,7 +188,7 @@ async function executeCodeChangeProposal(db, { pendingActionId, instruction, rep
     execSync(`git worktree add -b "${branchName}" "${worktreePath}"`, { cwd: resolvedRepoPath, stdio: 'pipe' });
     worktreeCreated = true;
 
-    const runResult = await runClaudeHeadless({ worktreePath, instruction, timeoutMs: DEFAULT_TIMEOUT_MS });
+    const runResult = await runEngineHeadless({ engine: resolvedEngine, worktreePath, instruction, timeoutMs: DEFAULT_TIMEOUT_MS });
 
     let diffText = '';
     try {
@@ -159,7 +202,7 @@ async function executeCodeChangeProposal(db, { pendingActionId, instruction, rep
     }
 
     const noteLines = [
-      `[execute-code] branch=${branchName} exit_code=${runResult.exitCode} timed_out=${runResult.timedOut}`,
+      `[execute-code] engine=${resolvedEngine} branch=${branchName} exit_code=${runResult.exitCode} timed_out=${runResult.timedOut}`,
       `--- stdout (truncated) ---`,
       truncate(runResult.stdout),
       `--- stderr (truncated) ---`,
@@ -174,6 +217,7 @@ async function executeCodeChangeProposal(db, { pendingActionId, instruction, rep
     return {
       ok: true,
       action: await pendingActionsService.getPendingActionById(db, numericId),
+      engine: resolvedEngine,
       branch_name: branchName,
       exit_code: runResult.exitCode,
       timed_out: runResult.timedOut,
@@ -204,6 +248,8 @@ async function executeCodeChangeProposal(db, { pendingActionId, instruction, rep
 
 module.exports = {
   ALLOWED_REPO_PATHS,
+  ENGINES,
   isAllowedRepoPath,
+  checkEngineAvailability,
   executeCodeChangeProposal
 };
