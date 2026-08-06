@@ -410,6 +410,12 @@ async function ensureTables(db) {
     );
   }
 
+  // Phase 21-1: per-project tool access restriction. NULL (every pre-existing row) or an
+  // empty array both mean "no restriction" - only a non-empty array narrows access. Default
+  // NULL keeps every project unrestricted until someone explicitly opts in, so this can't
+  // regress any project that never touches allowed_tools.
+  await ensureColumn(db, 'personal_agent_project_rules', 'allowed_tools', 'LONGTEXT NULL AFTER keywords');
+
   // Phase 6-1: fixed per-project guidelines that are always injected into the agent prompt,
   // independent of whatever memory the keyword search happens to find. A project can have many
   // guidelines (e.g. "매물 등록 규칙", "고객 응대 톤"), so this is not unique-per-project_code
@@ -516,10 +522,39 @@ async function listProjectGuidelines(db, projectCode) {
   return rows;
 }
 
+// Phase 21-1: NULL, missing, or an empty array all mean "unrestricted" - only returns a
+// non-null value when there's an actual non-empty allow-list to enforce. Kept separate from
+// JSON.parse's own null-on-empty-string handling since '[]' parses fine but should still
+// collapse to null here (empty list == no restriction, not "allow nothing").
+function parseAllowedTools(raw) {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length === 0) return null;
+    return parsed.map((t) => String(t));
+  } catch (_) {
+    return null;
+  }
+}
+
+function isToolAllowed(allowedTools, toolKey) {
+  if (!Array.isArray(allowedTools) || allowedTools.length === 0) return true;
+  return allowedTools.includes(toolKey);
+}
+
+async function getAllowedToolsForProject(db, projectCode) {
+  await ensureTables(db);
+  const [rows] = await db.query(
+    'SELECT allowed_tools FROM personal_agent_project_rules WHERE project_code = ?',
+    [projectCode]
+  );
+  return rows.length ? parseAllowedTools(rows[0].allowed_tools) : null;
+}
+
 async function getProjectRules(db) {
   await ensureTables(db);
   const [rows] = await db.query(
-    `SELECT project_code, label, keywords, is_active
+    `SELECT project_code, label, keywords, allowed_tools, is_active
      FROM personal_agent_project_rules
      WHERE is_active = 1
      ORDER BY project_code ASC`
@@ -527,7 +562,8 @@ async function getProjectRules(db) {
   return rows.map((r) => ({
     project_code: r.project_code,
     label: r.label,
-    keywords: (() => { try { return JSON.parse(r.keywords || '[]'); } catch (_) { return []; } })()
+    keywords: (() => { try { return JSON.parse(r.keywords || '[]'); } catch (_) { return []; } })(),
+    allowed_tools: parseAllowedTools(r.allowed_tools)
   }));
 }
 
@@ -599,11 +635,11 @@ async function addProjectRuleWithGuidelines(db, { project_code, label, keywords,
   };
 }
 
-async function updateProjectRule(db, projectCode, { label, keywords }) {
+async function updateProjectRule(db, projectCode, { label, keywords, allowed_tools }) {
   await ensureTables(db);
   const code = String(projectCode || '').trim();
   const [existing] = await db.query(
-    'SELECT id, label, keywords FROM personal_agent_project_rules WHERE project_code = ?',
+    'SELECT id, label, keywords, allowed_tools FROM personal_agent_project_rules WHERE project_code = ?',
     [code]
   );
   if (!existing.length) throw new Error(`project_code "${code}" not found`);
@@ -612,12 +648,18 @@ async function updateProjectRule(db, projectCode, { label, keywords }) {
   const nextKeywords = Array.isArray(keywords)
     ? keywords.map((k) => String(k))
     : (() => { try { return JSON.parse(existing[0].keywords || '[]'); } catch (_) { return []; } })();
+  // allowed_tools: only touched when the caller actually sends the field. An explicit []
+  // or null both clear the restriction back to "unrestricted" (same as never setting it);
+  // omitting the field entirely leaves whatever was already there untouched.
+  const nextAllowedTools = allowed_tools !== undefined
+    ? (Array.isArray(allowed_tools) && allowed_tools.length ? allowed_tools.map((t) => String(t)) : null)
+    : parseAllowedTools(existing[0].allowed_tools);
 
   await db.query(
-    'UPDATE personal_agent_project_rules SET label = ?, keywords = ? WHERE project_code = ?',
-    [nextLabel, JSON.stringify(nextKeywords), code]
+    'UPDATE personal_agent_project_rules SET label = ?, keywords = ?, allowed_tools = ? WHERE project_code = ?',
+    [nextLabel, JSON.stringify(nextKeywords), nextAllowedTools ? JSON.stringify(nextAllowedTools) : null, code]
   );
-  return { project_code: code, label: nextLabel, keywords: nextKeywords };
+  return { project_code: code, label: nextLabel, keywords: nextKeywords, allowed_tools: nextAllowedTools };
 }
 
 async function detectProject(db, question, requestedProjectCode = 'auto') {
@@ -1360,8 +1402,25 @@ async function executeProviderAnswer({ question, detected, context, payload, db,
   // free memory-only answer path.
   const autoCrmTool = isAutoProvider && liveRequested && Boolean(gatewayDecision.auto_enable_crm_tool);
   const autoGithubTool = isAutoProvider && liveRequested && Boolean(gatewayDecision.auto_enable_github_tool);
-  const enableCrmTool = isAutoProvider ? autoCrmTool : isTruthy(payload.enable_crm_tool);
-  const enableGithubTool = isAutoProvider ? autoGithubTool : isTruthy(payload.enable_github_tool);
+  const requestedCrmTool = isAutoProvider ? autoCrmTool : isTruthy(payload.enable_crm_tool);
+  const requestedGithubTool = isAutoProvider ? autoGithubTool : isTruthy(payload.enable_github_tool);
+  // Phase 21-1: per-project allow-list, enforced here so it covers both the auto-routing
+  // path (autoCrmTool/autoGithubTool above) and the manual enable_crm_tool/enable_github_tool
+  // opt-in the same way - neither can turn a tool on if this project doesn't allow it.
+  // NULL/empty allowed_tools (every pre-existing project) means unrestricted, so this is a
+  // no-op unless a project has actually been given a non-empty allow-list.
+  const projectAllowedTools = await getAllowedToolsForProject(db, detected.detected_project_code);
+  const crmToolAllowedForProject = isToolAllowed(projectAllowedTools, 'crm');
+  const githubToolAllowedForProject = isToolAllowed(projectAllowedTools, 'github');
+  const toolAccessBlocked = [];
+  if (requestedCrmTool && !crmToolAllowedForProject) {
+    toolAccessBlocked.push({ tool: 'crm', reason: '이 프로젝트는 CRM 도구 사용이 허용되지 않습니다.' });
+  }
+  if (requestedGithubTool && !githubToolAllowedForProject) {
+    toolAccessBlocked.push({ tool: 'github', reason: '이 프로젝트는 GitHub 도구 사용이 허용되지 않습니다.' });
+  }
+  const enableCrmTool = requestedCrmTool && crmToolAllowedForProject;
+  const enableGithubTool = requestedGithubTool && githubToolAllowedForProject;
   // Phase 6-4: explicit opt-in only, no gateway-auto path - propose_github_issue never fires
   // unless the caller sets enable_write_proposals, regardless of provider=auto classification.
   const enableWriteProposals = isTruthy(payload.enable_write_proposals);
@@ -1536,7 +1595,8 @@ async function executeProviderAnswer({ question, detected, context, payload, db,
       gateway_decision: gatewayDecision,
       live_requested: liveRequested,
       fallback_used: requestedProvider !== 'auto' && route.selected_provider !== requestedProvider,
-      tool_audit: toolAudit
+      tool_audit: toolAudit,
+      tool_access_blocked: toolAccessBlocked.length ? toolAccessBlocked : null
     };
   } catch (error) {
     if (!allowFallback) throw error;
@@ -2582,6 +2642,7 @@ async function ask(db, payload = {}) {
     github_tool_audit: providerResult.tool_audit?.tool_name === 'get_recent_commits' ? providerResult.tool_audit : null,
     write_proposal_used: Boolean(providerResult.tool_audit?.tool_used && providerResult.tool_audit?.tool_name === 'propose_github_issue'),
     write_proposal_audit: providerResult.tool_audit?.tool_name === 'propose_github_issue' ? providerResult.tool_audit : null,
+    tool_access_blocked: providerResult.tool_access_blocked || null,
     saved: true,
     storage: {
       save_status: finalSaveStatus,
