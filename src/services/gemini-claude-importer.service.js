@@ -21,6 +21,72 @@ function sha256(value) {
   return crypto.createHash("sha256").update(String(value || "")).digest("hex");
 }
 
+// Phase 22-2: 200-500 rows per multi-VALUES INSERT is the usual safe range against
+// max_allowed_packet without needing to size batches by actual payload bytes - individual
+// message content_text can be long (full assistant answers with code blocks), so this stays
+// on the low end of that range rather than the high end.
+const MESSAGE_BATCH_SIZE = Number(process.env.IMPORT_MESSAGE_BATCH_SIZE) || 250;
+
+const MESSAGE_COLUMNS = [
+  "imported_conversation_id", "batch_id", "source_platform", "source_message_id", "parent_message_id",
+  "message_order", "role", "author_name", "content_type", "content_text", "raw_json", "token_estimate",
+  "source_created_at"
+];
+
+function messageToRowValues({ message, importedConversationId, batchId, platform }) {
+  return [
+    importedConversationId,
+    batchId,
+    platform,
+    message.source_message_id,
+    message.parent_message_id,
+    message.message_order,
+    message.role,
+    message.author_name,
+    message.content_type,
+    message.content_text,
+    safeJson(message.raw_json),
+    Math.ceil((message.content_text || "").length / 4),
+    message.source_created_at
+  ];
+}
+
+// Was one INSERT per message (Phase 15-5 original) - for a 6,800-message Claude export that
+// meant 6,800 sequential round trips to Railway, ~54 minutes. Chunks into multi-row INSERTs
+// instead; each chunk runs on its own connection inside a transaction, so a failure only
+// rolls back the messages in that one chunk (the conversation row and any already-committed
+// chunks stay intact) rather than the whole conversation or the whole import.
+async function insertMessagesInBatches({ messages, importedConversationId, batchId, platform, progressLabel }) {
+  if (!messages.length) return 0;
+
+  let inserted = 0;
+  for (let offset = 0; offset < messages.length; offset += MESSAGE_BATCH_SIZE) {
+    const chunk = messages.slice(offset, offset + MESSAGE_BATCH_SIZE);
+    const rowPlaceholder = `(${MESSAGE_COLUMNS.map(() => "?").join(", ")})`;
+    const params = chunk.flatMap((message) => messageToRowValues({ message, importedConversationId, batchId, platform }));
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.query(
+        `INSERT INTO imported_conversation_messages (${MESSAGE_COLUMNS.join(", ")}) VALUES ${chunk.map(() => rowPlaceholder).join(", ")}`,
+        params
+      );
+      await conn.commit();
+    } catch (error) {
+      await conn.rollback();
+      throw error;
+    } finally {
+      conn.release();
+    }
+
+    inserted += chunk.length;
+    console.log(`[gemini-claude-importer] ${progressLabel}: ${inserted}/${messages.length} messages inserted`);
+  }
+
+  return inserted;
+}
+
 function normalizeFsPath(inputPath) {
   if (!inputPath || typeof inputPath !== "string") return null;
   return path.normalize(inputPath.trim().replace(/^[']|[']$/g, "").replace(/^[\"]|[\"]$/g, ""));
@@ -275,32 +341,13 @@ async function insertNormalizedConversation({ batchId, platform, projectCode, co
   ]);
 
   const importedConversationId = Number(conversationResult.insertId);
-  let insertedMessages = 0;
-
-  for (const message of conversation.messages) {
-    await pool.query(`
-      INSERT INTO imported_conversation_messages
-        (imported_conversation_id, batch_id, source_platform, source_message_id, parent_message_id,
-         message_order, role, author_name, content_type, content_text, raw_json, token_estimate,
-         source_created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
-      importedConversationId,
-      batchId,
-      platform,
-      message.source_message_id,
-      message.parent_message_id,
-      message.message_order,
-      message.role,
-      message.author_name,
-      message.content_type,
-      message.content_text,
-      safeJson(message.raw_json),
-      Math.ceil((message.content_text || "").length / 4),
-      message.source_created_at
-    ]);
-    insertedMessages += 1;
-  }
+  const insertedMessages = await insertMessagesInBatches({
+    messages: conversation.messages,
+    importedConversationId,
+    batchId,
+    platform,
+    progressLabel: `"${String(conversation.title || sessionId).slice(0, 60)}"`
+  });
 
   return { imported: true, duplicate: false, imported_conversation_id: importedConversationId, messages: insertedMessages };
 }
@@ -413,7 +460,9 @@ async function importGeminiClaudeExport(options = {}) {
     let failedConversations = 0;
     const results = [];
 
-    for (const conversation of normalized) {
+    for (let i = 0; i < normalized.length; i += 1) {
+      const conversation = normalized[i];
+      console.log(`[gemini-claude-importer] conversation ${i + 1}/${normalized.length}: "${String(conversation.title || "").slice(0, 60)}" (${conversation.message_count || 0} messages)`);
       try {
         const result = await insertNormalizedConversation({ batchId, platform, projectCode, conversation, skipDuplicates });
         results.push(result);
