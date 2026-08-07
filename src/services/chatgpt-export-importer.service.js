@@ -298,8 +298,7 @@ async function getChatGPTImporterStatus() {
     checklist,
     next_actions: dependency.available
       ? [
-          "Place ChatGPT export ZIP on the local PC or server.",
-          "Run POST /ai/imports/chatgpt/import with zip_file_path and project_code.",
+          "POST /ai/imports/chatgpt/import as multipart/form-data - field \"file\" (the export ZIP) plus project_code/skip_duplicates/limit as form fields.",
           "After import, proceed to Phase 15-3 Summary Queue linkage."
         ]
       : [
@@ -434,7 +433,7 @@ async function importChatGPTExportFromZip(options = {}) {
     INSERT INTO imported_conversation_batches
       (batch_code, source_platform, source_file_name, project_code, import_status,
        options_json, notes, started_at)
-    VALUES (?, ?, ?, ?, ?, ?, NOW())
+    VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
   `, [
     batchCode,
     "chatgpt",

@@ -3,6 +3,10 @@
 // Merge the following /agent route block into the existing router file after requiring the service.
 
 const express = require('express');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const multer = require('multer');
 const router = express.Router();
 const personalAgent = require('../services/phase17-personal-agent.service');
 const db = require('../config/db');
@@ -432,8 +436,55 @@ router.post('/imports/chatgpt/test', asyncHandler(async (req, res) => {
   res.json(await chatgptExportImporterService.runChatGPTImporterTest(req.body || {}));
 }));
 
-router.post('/imports/chatgpt/import', asyncHandler(async (req, res) => {
-  res.json(await chatgptExportImporterService.importChatGPTExportFromZip(req.body || {}));
+// Phase 21-2: file-upload based (multipart/form-data), so this works on Railway too - the
+// old zip_file_path shape required the file to already exist on the server's own local
+// disk, which only ever worked when the API happened to be running on the same PC as the
+// export file. importChatGPTExportFromZip() itself is untouched: multer writes the upload
+// to a scratch temp dir, we point zip_file_path at that path, then delete it in `finally`
+// regardless of import success/failure - the temp file only ever exists for the duration
+// of this one request, so Railway's ephemeral filesystem is a non-issue.
+const CHATGPT_IMPORT_TMP_DIR = path.join(os.tmpdir(), 'ai-memory-gateway-chatgpt-import');
+fs.mkdirSync(CHATGPT_IMPORT_TMP_DIR, { recursive: true });
+
+const chatgptImportUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, CHATGPT_IMPORT_TMP_DIR),
+    filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`)
+  }),
+  // ChatGPT exports can run large (years of conversation history in one conversations.json) -
+  // 50MB gives real exports headroom without leaving the limit effectively unbounded.
+  limits: { fileSize: 50 * 1024 * 1024 }
+});
+
+router.post('/imports/chatgpt/import', chatgptImportUpload.single('file'), asyncHandler(async (req, res) => {
+  if (!req.file) {
+    return sendStandardError(res, {
+      req,
+      code: 'VALIDATION_ERROR',
+      message: 'file is required (multipart/form-data field name: "file").',
+      statusCode: 400,
+      source: 'ai.routes:/imports/chatgpt/import'
+    });
+  }
+
+  try {
+    // multipart form fields always arrive as strings - importChatGPTExportFromZip's own
+    // `options.skip_duplicates !== false` check would treat the string "false" as truthy,
+    // so that coercion has to happen here rather than relying on the shared function.
+    const skipDuplicates = req.body?.skip_duplicates === undefined
+      ? undefined
+      : String(req.body.skip_duplicates).toLowerCase() !== 'false';
+
+    const result = await chatgptExportImporterService.importChatGPTExportFromZip({
+      zip_file_path: req.file.path,
+      project_code: req.body?.project_code,
+      skip_duplicates: skipDuplicates,
+      limit: req.body?.limit
+    });
+    res.json(result);
+  } finally {
+    fs.unlink(req.file.path, () => {});
+  }
 }));
 
 module.exports = router;
