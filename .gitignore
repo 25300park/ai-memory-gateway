@@ -47,6 +47,7 @@ docs/deleted-corrupted-rows-20260804.json
 .vscode/*
 !.vscode/extensions.json
 .idea/
+.claude/
 
 # Coverage / build
 coverage/
