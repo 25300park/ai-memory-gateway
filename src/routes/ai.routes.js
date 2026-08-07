@@ -14,6 +14,7 @@ const summaryQueueLinkService = require('../services/phase15-summary-queue-link.
 const importMemorySearchService = require('../services/phase15-import-memory-search.service');
 const geminiClaudeImporterService = require('../services/gemini-claude-importer.service');
 const chatgptExportImporterService = require('../services/chatgpt-export-importer.service');
+const importJobsService = require('../services/import-jobs.service');
 const pendingActionsService = require('../services/pending-actions.service');
 const codeExecutionService = require('../services/code-execution.service');
 const { sendStandardError } = require('../services/api-error.service');
@@ -437,6 +438,12 @@ router.post('/imports/gemini-claude/test', asyncHandler(async (req, res) => {
 
 // Phase 22-3: file-upload based (multipart/form-data), reusing the same importUpload
 // instance (temp dir + 50MB limit) as the Phase 21-2 ChatGPT importer route.
+// Phase 22-5: responds with a job_id as soon as the file is on disk instead of waiting for
+// the full unzip/parse/insert to finish - the Next.js proxy in front of this backend runs
+// as a Vercel serverless function with a ~10s timeout, and even a duplicate-only dedup pass
+// over 33 conversations was already taking ~20s. The actual import runs via setImmediate()
+// after the response is sent; that's safe here because this is a persistent Railway process,
+// not a serverless function that gets torn down once the response goes out.
 router.post('/imports/gemini-claude/import', importUpload.single('file'), asyncHandler(async (req, res) => {
   if (!req.file) {
     return sendStandardError(res, {
@@ -448,25 +455,46 @@ router.post('/imports/gemini-claude/import', importUpload.single('file'), asyncH
     });
   }
 
-  try {
-    // multipart form fields always arrive as strings - importGeminiClaudeExport's own
-    // `options.skip_duplicates !== false` check would treat the string "false" as truthy,
-    // so that coercion has to happen here rather than relying on the shared function.
-    const skipDuplicates = req.body?.skip_duplicates === undefined
-      ? undefined
-      : String(req.body.skip_duplicates).toLowerCase() !== 'false';
+  // multipart form fields always arrive as strings - importGeminiClaudeExport's own
+  // `options.skip_duplicates !== false` check would treat the string "false" as truthy,
+  // so that coercion has to happen here rather than relying on the shared function.
+  const skipDuplicates = req.body?.skip_duplicates === undefined
+    ? undefined
+    : String(req.body.skip_duplicates).toLowerCase() !== 'false';
+  const sourcePlatform = req.body?.source_platform;
+  const projectCode = req.body?.project_code;
+  const limit = req.body?.limit;
+  const filePath = req.file.path;
 
-    const result = await geminiClaudeImporterService.importGeminiClaudeExport({
-      source_platform: req.body?.source_platform,
-      zip_file_path: req.file.path,
-      project_code: req.body?.project_code,
-      skip_duplicates: skipDuplicates,
-      limit: req.body?.limit
-    });
-    res.json(result);
-  } finally {
-    fs.unlink(req.file.path, () => {});
-  }
+  const jobId = await importJobsService.createImportJob({ platform: sourcePlatform || 'unknown', projectCode });
+
+  res.json({
+    ok: true,
+    job_id: jobId,
+    status: 'processing',
+    message: 'Import is running in the background. Poll GET /imports/status/:job_id for progress.'
+  });
+
+  setImmediate(async () => {
+    try {
+      const result = await geminiClaudeImporterService.importGeminiClaudeExport({
+        source_platform: sourcePlatform,
+        zip_file_path: filePath,
+        project_code: projectCode,
+        skip_duplicates: skipDuplicates,
+        limit
+      });
+      if (result.ok === false) {
+        await importJobsService.markImportJobFailed(jobId, result.error?.message || 'Import failed.');
+      } else {
+        await importJobsService.markImportJobCompleted(jobId, result);
+      }
+    } catch (error) {
+      await importJobsService.markImportJobFailed(jobId, error.message);
+    } finally {
+      fs.unlink(filePath, () => {});
+    }
+  });
 }));
 
 // -----------------------------------------------------------------------------
@@ -489,6 +517,8 @@ router.post('/imports/chatgpt/test', asyncHandler(async (req, res) => {
   res.json(await chatgptExportImporterService.runChatGPTImporterTest(req.body || {}));
 }));
 
+// Phase 22-5: same background-processing pattern as /imports/gemini-claude/import above -
+// respond with a job_id immediately, run the real import via setImmediate() after that.
 router.post('/imports/chatgpt/import', importUpload.single('file'), asyncHandler(async (req, res) => {
   if (!req.file) {
     return sendStandardError(res, {
@@ -500,24 +530,61 @@ router.post('/imports/chatgpt/import', importUpload.single('file'), asyncHandler
     });
   }
 
-  try {
-    // multipart form fields always arrive as strings - importChatGPTExportFromZip's own
-    // `options.skip_duplicates !== false` check would treat the string "false" as truthy,
-    // so that coercion has to happen here rather than relying on the shared function.
-    const skipDuplicates = req.body?.skip_duplicates === undefined
-      ? undefined
-      : String(req.body.skip_duplicates).toLowerCase() !== 'false';
+  // multipart form fields always arrive as strings - importChatGPTExportFromZip's own
+  // `options.skip_duplicates !== false` check would treat the string "false" as truthy,
+  // so that coercion has to happen here rather than relying on the shared function.
+  const skipDuplicates = req.body?.skip_duplicates === undefined
+    ? undefined
+    : String(req.body.skip_duplicates).toLowerCase() !== 'false';
+  const projectCode = req.body?.project_code;
+  const limit = req.body?.limit;
+  const filePath = req.file.path;
 
-    const result = await chatgptExportImporterService.importChatGPTExportFromZip({
-      zip_file_path: req.file.path,
-      project_code: req.body?.project_code,
-      skip_duplicates: skipDuplicates,
-      limit: req.body?.limit
+  const jobId = await importJobsService.createImportJob({ platform: 'chatgpt', projectCode });
+
+  res.json({
+    ok: true,
+    job_id: jobId,
+    status: 'processing',
+    message: 'Import is running in the background. Poll GET /imports/status/:job_id for progress.'
+  });
+
+  setImmediate(async () => {
+    try {
+      const result = await chatgptExportImporterService.importChatGPTExportFromZip({
+        zip_file_path: filePath,
+        project_code: projectCode,
+        skip_duplicates: skipDuplicates,
+        limit
+      });
+      if (result.ok === false) {
+        await importJobsService.markImportJobFailed(jobId, result.error?.message || 'Import failed.');
+      } else {
+        await importJobsService.markImportJobCompleted(jobId, result);
+      }
+    } catch (error) {
+      await importJobsService.markImportJobFailed(jobId, error.message);
+    } finally {
+      fs.unlink(filePath, () => {});
+    }
+  });
+}));
+
+// -----------------------------------------------------------------------------
+// Phase 22-5: shared job-status polling endpoint for both importers above.
+// -----------------------------------------------------------------------------
+router.get('/imports/status/:jobId', asyncHandler(async (req, res) => {
+  const job = await importJobsService.getImportJobStatus(req.params.jobId);
+  if (!job) {
+    return sendStandardError(res, {
+      req,
+      code: 'IMPORT_JOB_NOT_FOUND',
+      message: `No import job found for job_id "${req.params.jobId}".`,
+      statusCode: 404,
+      source: 'ai.routes:/imports/status/:jobId'
     });
-    res.json(result);
-  } finally {
-    fs.unlink(req.file.path, () => {});
   }
+  res.json({ ok: true, job });
 }));
 
 module.exports = router;
