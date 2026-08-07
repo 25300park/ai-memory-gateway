@@ -23,6 +23,29 @@ function asyncHandler(fn) {
   return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 }
 
+// Phase 21-2: file-upload based (multipart/form-data), so import endpoints work on
+// Railway too - the old zip_file_path/file_path shape required the file to already exist
+// on the server's own local disk, which only ever worked when the API happened to be
+// running on the same PC as the export file. Multer writes the upload to a scratch temp
+// dir; each route points its importer's file-path option at that path, then deletes it in
+// `finally` regardless of import success/failure - the temp file only ever exists for the
+// duration of one request, so Railway's ephemeral filesystem is a non-issue.
+// Phase 22-3 reuses this same importUpload instance for /imports/gemini-claude/import
+// instead of standing up a second multer config - both importers accept the same
+// zip-or-json shape and the same 50MB ceiling.
+const IMPORT_TMP_DIR = path.join(os.tmpdir(), 'ai-memory-gateway-import');
+fs.mkdirSync(IMPORT_TMP_DIR, { recursive: true });
+
+const importUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, IMPORT_TMP_DIR),
+    filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`)
+  }),
+  // Exports can run large (years of conversation history in one file) - 50MB gives real
+  // exports headroom without leaving the limit effectively unbounded.
+  limits: { fileSize: 50 * 1024 * 1024 }
+});
+
 // -----------------------------------------------------------------------------
 // Phase 9-1: lightweight DB health check for the console's connection-error banner.
 // Always resolves (never throws to the global error handler) so the console can render
@@ -412,8 +435,38 @@ router.post('/imports/gemini-claude/test', asyncHandler(async (req, res) => {
   res.json(await geminiClaudeImporterService.runGeminiClaudeImporterTest(req.body || {}));
 }));
 
-router.post('/imports/gemini-claude/import', asyncHandler(async (req, res) => {
-  res.json(await geminiClaudeImporterService.importGeminiClaudeExport(req.body || {}));
+// Phase 22-3: file-upload based (multipart/form-data), reusing the same importUpload
+// instance (temp dir + 50MB limit) as the Phase 21-2 ChatGPT importer route.
+router.post('/imports/gemini-claude/import', importUpload.single('file'), asyncHandler(async (req, res) => {
+  if (!req.file) {
+    return sendStandardError(res, {
+      req,
+      code: 'VALIDATION_ERROR',
+      message: 'file is required (multipart/form-data field name: "file").',
+      statusCode: 400,
+      source: 'ai.routes:/imports/gemini-claude/import'
+    });
+  }
+
+  try {
+    // multipart form fields always arrive as strings - importGeminiClaudeExport's own
+    // `options.skip_duplicates !== false` check would treat the string "false" as truthy,
+    // so that coercion has to happen here rather than relying on the shared function.
+    const skipDuplicates = req.body?.skip_duplicates === undefined
+      ? undefined
+      : String(req.body.skip_duplicates).toLowerCase() !== 'false';
+
+    const result = await geminiClaudeImporterService.importGeminiClaudeExport({
+      source_platform: req.body?.source_platform,
+      zip_file_path: req.file.path,
+      project_code: req.body?.project_code,
+      skip_duplicates: skipDuplicates,
+      limit: req.body?.limit
+    });
+    res.json(result);
+  } finally {
+    fs.unlink(req.file.path, () => {});
+  }
 }));
 
 // -----------------------------------------------------------------------------
@@ -436,27 +489,7 @@ router.post('/imports/chatgpt/test', asyncHandler(async (req, res) => {
   res.json(await chatgptExportImporterService.runChatGPTImporterTest(req.body || {}));
 }));
 
-// Phase 21-2: file-upload based (multipart/form-data), so this works on Railway too - the
-// old zip_file_path shape required the file to already exist on the server's own local
-// disk, which only ever worked when the API happened to be running on the same PC as the
-// export file. importChatGPTExportFromZip() itself is untouched: multer writes the upload
-// to a scratch temp dir, we point zip_file_path at that path, then delete it in `finally`
-// regardless of import success/failure - the temp file only ever exists for the duration
-// of this one request, so Railway's ephemeral filesystem is a non-issue.
-const CHATGPT_IMPORT_TMP_DIR = path.join(os.tmpdir(), 'ai-memory-gateway-chatgpt-import');
-fs.mkdirSync(CHATGPT_IMPORT_TMP_DIR, { recursive: true });
-
-const chatgptImportUpload = multer({
-  storage: multer.diskStorage({
-    destination: (req, file, cb) => cb(null, CHATGPT_IMPORT_TMP_DIR),
-    filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`)
-  }),
-  // ChatGPT exports can run large (years of conversation history in one conversations.json) -
-  // 50MB gives real exports headroom without leaving the limit effectively unbounded.
-  limits: { fileSize: 50 * 1024 * 1024 }
-});
-
-router.post('/imports/chatgpt/import', chatgptImportUpload.single('file'), asyncHandler(async (req, res) => {
+router.post('/imports/chatgpt/import', importUpload.single('file'), asyncHandler(async (req, res) => {
   if (!req.file) {
     return sendStandardError(res, {
       req,
