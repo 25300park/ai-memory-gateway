@@ -634,4 +634,11 @@ router.get('/imports/status/:jobId', asyncHandler(async (req, res) => {
   res.json({ ok: true, job });
 }));
 
+// -----------------------------------------------------------------------------
+// Phase 23-1: task board - mounted as a sub-router so it inherits the aiRateLimiter +
+// adminApiAuthMiddleware already applied to this whole /ai mount in app.js, same as every
+// other route above (no browser-direct-access carve-out like the Phase 22-8 upload routes).
+// -----------------------------------------------------------------------------
+router.use('/task-board', require('./task-board.routes'));
+
 module.exports = router;
