@@ -2,10 +2,13 @@ const crypto = require("crypto");
 const pool = require("../config/db");
 
 // Phase 22-5: tracks the background-processing state of an upload-triggered import so the
-// upload endpoint can respond immediately (job_id + status:'processing') instead of
-// blocking until the whole ZIP is unzipped/parsed/inserted - the Next.js proxy route in
-// front of this backend runs as a Vercel serverless function with a ~10s timeout, and a
-// 33-conversation dedup check alone was already taking ~20s.
+// upload endpoint can respond immediately (job_id + status) instead of blocking until the
+// whole ZIP is unzipped/parsed/inserted - the Next.js proxy route in front of this backend
+// runs as a Vercel serverless function with a ~10s timeout, and a 33-conversation dedup
+// check alone was already taking ~20s.
+// Phase 22-7: status vocabulary unified to queued/processing/done/failed (was
+// processing/completed/failed) to match the console's new /api/import/upload contract, plus
+// a progress column (0-100) so a long-running import can report how far it's gotten.
 // mariadb driver returns BIGINT columns (e.g. raw_imported_conversations.id) as native
 // BigInt, which JSON.stringify() cannot serialize on its own - app.js registers an Express
 // "json replacer" that does this same BigInt->string conversion for res.json(), but that
@@ -26,7 +29,8 @@ async function ensureImportJobsTable() {
       job_id VARCHAR(64) NOT NULL UNIQUE,
       platform VARCHAR(50) NOT NULL,
       project_code VARCHAR(120) NULL,
-      status VARCHAR(20) NOT NULL DEFAULT 'processing',
+      status VARCHAR(20) NOT NULL DEFAULT 'queued',
+      progress TINYINT UNSIGNED NULL,
       result_summary LONGTEXT NULL,
       error_message TEXT NULL,
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -36,21 +40,42 @@ async function ensureImportJobsTable() {
       INDEX idx_import_jobs_created (created_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+
+  // Phase 22-7: table already existed (with 'processing' as the DEFAULT and no progress
+  // column) before this phase on any deploy that already ran the Phase 22-5 migration above
+  // - CREATE TABLE IF NOT EXISTS is a no-op there, so the new column has to be added
+  // explicitly.
+  const [rows] = await pool.query(
+    `SELECT COUNT(*) AS cnt FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name = 'import_jobs' AND column_name = 'progress'`
+  );
+  if (Number(rows[0]?.cnt || 0) === 0) {
+    await pool.query(`ALTER TABLE import_jobs ADD COLUMN progress TINYINT UNSIGNED NULL AFTER status`);
+  }
 }
 
 async function createImportJob({ platform, projectCode }) {
   await ensureImportJobsTable();
   const jobId = crypto.randomUUID();
   await pool.query(
-    `INSERT INTO import_jobs (job_id, platform, project_code, status) VALUES (?, ?, ?, 'processing')`,
+    `INSERT INTO import_jobs (job_id, platform, project_code, status) VALUES (?, ?, ?, 'queued')`,
     [jobId, platform, projectCode || null]
   );
   return jobId;
 }
 
+async function markImportJobProcessing(jobId) {
+  await pool.query(`UPDATE import_jobs SET status = 'processing' WHERE job_id = ?`, [jobId]);
+}
+
+async function updateImportJobProgress(jobId, progress) {
+  const clamped = Math.max(0, Math.min(100, Math.round(Number(progress) || 0)));
+  await pool.query(`UPDATE import_jobs SET status = 'processing', progress = ? WHERE job_id = ?`, [clamped, jobId]);
+}
+
 async function markImportJobCompleted(jobId, resultSummary) {
   await pool.query(
-    `UPDATE import_jobs SET status = 'completed', result_summary = ?, completed_at = NOW() WHERE job_id = ?`,
+    `UPDATE import_jobs SET status = 'done', progress = 100, result_summary = ?, completed_at = NOW() WHERE job_id = ?`,
     [safeJson(resultSummary), jobId]
   );
 }
@@ -82,6 +107,7 @@ async function getImportJobStatus(jobId) {
     platform: row.platform,
     project_code: row.project_code,
     status: row.status,
+    progress: row.progress === null || row.progress === undefined ? null : Number(row.progress),
     result_summary: resultSummary,
     error_message: row.error_message,
     created_at: row.created_at,
@@ -92,6 +118,8 @@ async function getImportJobStatus(jobId) {
 module.exports = {
   ensureImportJobsTable,
   createImportJob,
+  markImportJobProcessing,
+  updateImportJobProgress,
   markImportJobCompleted,
   markImportJobFailed,
   getImportJobStatus

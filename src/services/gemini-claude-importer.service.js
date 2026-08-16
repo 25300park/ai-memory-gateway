@@ -424,6 +424,10 @@ async function importGeminiClaudeExport(options = {}) {
   const projectCode = options.project_code || "rbs_ai_memory";
   const limit = Number(options.limit || 0);
   const skipDuplicates = options.skip_duplicates !== false;
+  // Phase 22-7: optional (current, total) callback so a caller (the async job route) can
+  // surface coarse progress - one call per conversation processed, not per message, since
+  // that's the only granularity available without restructuring insertMessagesInBatches.
+  const onProgress = typeof options.onProgress === "function" ? options.onProgress : null;
 
   if (!["gemini", "claude"].includes(platform)) {
     return { ok: false, phase: "15-5", import_status: "FAILED", error: { code: "INVALID_PLATFORM", message: "source_platform must be gemini or claude." } };
@@ -475,6 +479,7 @@ async function importGeminiClaudeExport(options = {}) {
         failedConversations += 1;
         results.push({ imported: false, failed: true, error: error.message, title: conversation.title });
       }
+      if (onProgress) onProgress(i + 1, normalized.length);
     }
 
     await pool.query(`

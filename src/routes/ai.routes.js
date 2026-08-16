@@ -15,13 +15,41 @@ const importMemorySearchService = require('../services/phase15-import-memory-sea
 const geminiClaudeImporterService = require('../services/gemini-claude-importer.service');
 const chatgptExportImporterService = require('../services/chatgpt-export-importer.service');
 const importJobsService = require('../services/import-jobs.service');
+const uploadTokensService = require('../services/upload-tokens.service');
 const pendingActionsService = require('../services/pending-actions.service');
 const codeExecutionService = require('../services/code-execution.service');
 const { sendStandardError } = require('../services/api-error.service');
 const { isDbConnectionError, buildDbConnectionErrorMessage } = require('../utils/db-error-hint.util');
+const { extractAdminToken, validateAdminToken } = require('../services/security.service');
 
 function asyncHandler(fn) {
   return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+}
+
+// Phase 22-8: the two upload-import routes below sit outside app.js's blanket
+// adminApiAuthMiddleware (browsers upload directly to them and must never hold the full
+// admin token), so they validate their own auth here - either the real admin token (curl,
+// testing, or any other server-side caller keeps working unchanged) or a short-lived,
+// single-use upload token minted via POST /imports/upload-token (what the browser actually
+// uses). Mounted before importUpload.single('file') so a bad/missing credential is rejected
+// before any file bytes are even parsed off the wire.
+async function requireAdminOrUploadToken(req, res, next) {
+  const { value: adminToken } = extractAdminToken(req, { allowQuery: false });
+  if (adminToken && validateAdminToken(adminToken).ok) return next();
+
+  const uploadToken = req.headers['x-upload-token'];
+  if (typeof uploadToken === 'string' && uploadToken.trim()) {
+    const consumed = await uploadTokensService.consumeUploadToken(uploadToken.trim());
+    if (consumed) return next();
+  }
+
+  return sendStandardError(res, {
+    req,
+    code: 'UNAUTHORIZED',
+    message: 'A valid x-admin-token or x-upload-token header is required.',
+    statusCode: 401,
+    source: 'ai.routes:upload-auth'
+  });
 }
 
 // Phase 21-2: file-upload based (multipart/form-data), so import endpoints work on
@@ -444,7 +472,7 @@ router.post('/imports/gemini-claude/test', asyncHandler(async (req, res) => {
 // over 33 conversations was already taking ~20s. The actual import runs via setImmediate()
 // after the response is sent; that's safe here because this is a persistent Railway process,
 // not a serverless function that gets torn down once the response goes out.
-router.post('/imports/gemini-claude/import', importUpload.single('file'), asyncHandler(async (req, res) => {
+router.post('/imports/gemini-claude/import', asyncHandler(requireAdminOrUploadToken), importUpload.single('file'), asyncHandler(async (req, res) => {
   if (!req.file) {
     return sendStandardError(res, {
       req,
@@ -471,18 +499,22 @@ router.post('/imports/gemini-claude/import', importUpload.single('file'), asyncH
   res.json({
     ok: true,
     job_id: jobId,
-    status: 'processing',
+    status: 'queued',
     message: 'Import is running in the background. Poll GET /imports/status/:job_id for progress.'
   });
 
   setImmediate(async () => {
     try {
+      await importJobsService.markImportJobProcessing(jobId);
       const result = await geminiClaudeImporterService.importGeminiClaudeExport({
         source_platform: sourcePlatform,
         zip_file_path: filePath,
         project_code: projectCode,
         skip_duplicates: skipDuplicates,
-        limit
+        limit,
+        onProgress: (current, total) => {
+          importJobsService.updateImportJobProgress(jobId, (current / total) * 100).catch(() => {});
+        }
       });
       if (result.ok === false) {
         await importJobsService.markImportJobFailed(jobId, result.error?.message || 'Import failed.');
@@ -519,7 +551,7 @@ router.post('/imports/chatgpt/test', asyncHandler(async (req, res) => {
 
 // Phase 22-5: same background-processing pattern as /imports/gemini-claude/import above -
 // respond with a job_id immediately, run the real import via setImmediate() after that.
-router.post('/imports/chatgpt/import', importUpload.single('file'), asyncHandler(async (req, res) => {
+router.post('/imports/chatgpt/import', asyncHandler(requireAdminOrUploadToken), importUpload.single('file'), asyncHandler(async (req, res) => {
   if (!req.file) {
     return sendStandardError(res, {
       req,
@@ -545,17 +577,21 @@ router.post('/imports/chatgpt/import', importUpload.single('file'), asyncHandler
   res.json({
     ok: true,
     job_id: jobId,
-    status: 'processing',
+    status: 'queued',
     message: 'Import is running in the background. Poll GET /imports/status/:job_id for progress.'
   });
 
   setImmediate(async () => {
     try {
+      await importJobsService.markImportJobProcessing(jobId);
       const result = await chatgptExportImporterService.importChatGPTExportFromZip({
         zip_file_path: filePath,
         project_code: projectCode,
         skip_duplicates: skipDuplicates,
-        limit
+        limit,
+        onProgress: (current, total) => {
+          importJobsService.updateImportJobProgress(jobId, (current / total) * 100).catch(() => {});
+        }
       });
       if (result.ok === false) {
         await importJobsService.markImportJobFailed(jobId, result.error?.message || 'Import failed.');
@@ -568,6 +604,17 @@ router.post('/imports/chatgpt/import', importUpload.single('file'), asyncHandler
       fs.unlink(filePath, () => {});
     }
   });
+}));
+
+// -----------------------------------------------------------------------------
+// Phase 22-8: mints the short-lived upload token requireAdminOrUploadToken accepts above.
+// Stays behind app.js's blanket adminApiAuthMiddleware (not in UPLOAD_PATHS_RELATIVE) - only
+// the console's server-side /api/import/upload route calls this, using the real admin token,
+// then hands the short-lived token to the browser for the actual file upload.
+// -----------------------------------------------------------------------------
+router.post('/imports/upload-token', asyncHandler(async (req, res) => {
+  const { token, expires_at } = await uploadTokensService.createUploadToken();
+  res.json({ ok: true, token, expires_at });
 }));
 
 // -----------------------------------------------------------------------------

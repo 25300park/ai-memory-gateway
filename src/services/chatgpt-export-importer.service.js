@@ -383,6 +383,9 @@ async function importChatGPTExportFromZip(options = {}) {
   const projectCode = options.project_code || "rbs_ai_memory";
   const skipDuplicates = options.skip_duplicates !== false;
   const limit = Number(options.limit || 0);
+  // Phase 22-7: optional (current, total) callback so a caller (the async job route) can
+  // surface coarse progress - one call per conversation processed.
+  const onProgress = typeof options.onProgress === "function" ? options.onProgress : null;
 
   if (!zipFilePath) {
     return {
@@ -459,7 +462,8 @@ async function importChatGPTExportFromZip(options = {}) {
     let importedMessages = 0;
     const samples = [];
 
-    for (const conversation of normalized) {
+    for (let i = 0; i < normalized.length; i += 1) {
+      const conversation = normalized[i];
       try {
         const result = await insertNormalizedConversation({ batchId, projectCode, conversation, skipDuplicates });
         if (result.duplicate) {
@@ -478,6 +482,7 @@ async function importChatGPTExportFromZip(options = {}) {
       } catch (conversationError) {
         failedConversations += 1;
       }
+      if (onProgress) onProgress(i + 1, normalized.length);
     }
 
     await pool.query(`
