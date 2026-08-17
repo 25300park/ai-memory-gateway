@@ -15,6 +15,20 @@ function asyncHandler(fn) {
   return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 }
 
+function isValidId(id) {
+  return /^\d+$/.test(id);
+}
+
+function sendInvalidIdError(res, req, source) {
+  return sendStandardError(res, {
+    req,
+    code: 'VALIDATION_ERROR',
+    message: `id must be a positive integer, got "${req.params.id}".`,
+    statusCode: 400,
+    source
+  });
+}
+
 router.get('/items', asyncHandler(async (req, res) => {
   const systemCode = req.query.system_code;
   const items = await taskBoardService.listTaskBoardItems({ systemCode });
@@ -53,6 +67,9 @@ router.post('/items', asyncHandler(async (req, res) => {
 }));
 
 router.patch('/items/:id', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id)) {
+    return sendInvalidIdError(res, req, 'task-board.routes:PATCH /items/:id');
+  }
   const { title, description } = req.body || {};
   const item = await taskBoardService.updateTaskBoardItem(req.params.id, { title, description });
 
@@ -69,6 +86,9 @@ router.patch('/items/:id', asyncHandler(async (req, res) => {
 }));
 
 router.patch('/items/:id/status', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id)) {
+    return sendInvalidIdError(res, req, 'task-board.routes:PATCH /items/:id/status');
+  }
   const { status } = req.body || {};
 
   if (!taskBoardService.isValidKanbanStatus(status)) {
@@ -95,6 +115,9 @@ router.patch('/items/:id/status', asyncHandler(async (req, res) => {
 }));
 
 router.delete('/items/:id', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id)) {
+    return sendInvalidIdError(res, req, 'task-board.routes:DELETE /items/:id');
+  }
   const deleted = await taskBoardService.deleteTaskBoardItem(req.params.id);
   if (!deleted) {
     return sendStandardError(res, {
