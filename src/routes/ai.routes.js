@@ -13,6 +13,7 @@ const db = require('../config/db');
 const summaryQueueLinkService = require('../services/phase15-summary-queue-link.service');
 const importMemorySearchService = require('../services/phase15-import-memory-search.service');
 const geminiClaudeImporterService = require('../services/gemini-claude-importer.service');
+const importQualityReviewService = require('../services/phase15-import-quality-review.service');
 const chatgptExportImporterService = require('../services/chatgpt-export-importer.service');
 const importJobsService = require('../services/import-jobs.service');
 const uploadTokensService = require('../services/upload-tokens.service');
@@ -527,6 +528,32 @@ router.post('/imports/gemini-claude/import', asyncHandler(requireAdminOrUploadTo
       fs.unlink(filePath, () => {});
     }
   });
+}));
+
+// -----------------------------------------------------------------------------
+// Phase 15-6 route recovery: Import Quality Review - same silent-404 pattern as the
+// other Phase 15-x importer panels below: admin/index.html's Import Quality Review
+// panel has always called these five paths, but they were never wired to a route.
+// -----------------------------------------------------------------------------
+router.get('/imports/quality-review/status', asyncHandler(async (req, res) => {
+  res.json(await importQualityReviewService.getImportQualityReviewStatus());
+}));
+
+router.get('/imports/quality-review/checklist', asyncHandler(async (req, res) => {
+  const status = await importQualityReviewService.getImportQualityReviewStatus();
+  res.json({ ok: status.ok, phase: '15-6', checklist: status.checklist || [], status });
+}));
+
+router.post('/imports/quality-review/test', asyncHandler(async (req, res) => {
+  res.json(await importQualityReviewService.runImportQualityReviewTest(req.body || {}));
+}));
+
+router.post('/imports/quality-review/review', asyncHandler(async (req, res) => {
+  res.json(await importQualityReviewService.reviewImportedConversationQuality(req.body || {}));
+}));
+
+router.post('/imports/quality-review/duplicates', asyncHandler(async (req, res) => {
+  res.json(await importQualityReviewService.scanDuplicateCandidates(req.body || {}));
 }));
 
 // -----------------------------------------------------------------------------
