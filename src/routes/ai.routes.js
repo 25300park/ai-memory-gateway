@@ -409,6 +409,18 @@ router.post('/agent/context-search/test', asyncHandler(async (req, res) => {
   res.json({ ok: true, test_status: 'PASS', phase17_final_entry_allowed: true, result });
 }));
 
+// Phase 23-x route recovery: admin/index.html's "testAgentProjectDetectionBtn" has always
+// called this path, but it was never wired - same silent-404 pattern as the Phase 15-x
+// panels above. Wraps the same detectProject() call /agent/detect-project already uses (no
+// question validation there either), in the same {ok, test_status, phase17_final_entry_allowed,
+// result} envelope as /agent/context-search/test above. Unlike that sibling route, no
+// hardcoded default question is injected here - detectProject() doesn't need one, it already
+// degrades gracefully (confidence 0.25, detection_mode:'fallback') when question is empty.
+router.post('/agent/project-detection/test', asyncHandler(async (req, res) => {
+  const result = await personalAgent.detectProject(db, req.body.question, req.body.project_code || 'auto');
+  res.json({ ok: true, test_status: 'PASS', phase17_final_entry_allowed: true, result });
+}));
+
 
 // -----------------------------------------------------------------------------
 // Phase 15-3 route recovery: Imported Conversation -> Summary Queue
