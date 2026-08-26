@@ -14,6 +14,7 @@ const summaryQueueLinkService = require('../services/phase15-summary-queue-link.
 const importMemorySearchService = require('../services/phase15-import-memory-search.service');
 const geminiClaudeImporterService = require('../services/gemini-claude-importer.service');
 const importQualityReviewService = require('../services/phase15-import-quality-review.service');
+const phase15FinalChecklistService = require('../services/phase15-final-checklist.service');
 const chatgptExportImporterService = require('../services/chatgpt-export-importer.service');
 const importJobsService = require('../services/import-jobs.service');
 const uploadTokensService = require('../services/upload-tokens.service');
@@ -554,6 +555,26 @@ router.post('/imports/quality-review/review', asyncHandler(async (req, res) => {
 
 router.post('/imports/quality-review/duplicates', asyncHandler(async (req, res) => {
   res.json(await importQualityReviewService.scanDuplicateCandidates(req.body || {}));
+}));
+
+// -----------------------------------------------------------------------------
+// Phase 15-7 route recovery: Import Final Checklist - same silent-404 pattern as the
+// Phase 15-2/15-3/15-4/15-5/15-6 panels above. Unlike 15-6 (whose service has no dedicated
+// checklist function, so that route re-derives {checklist} from the status call),
+// phase15-final-checklist.service.js already exports getPhase15FinalStatus(),
+// getPhase15FinalChecklist(), and runPhase15FinalTest() as three separate purpose-built
+// functions - each route below calls its own matching function directly, not a shared one.
+// -----------------------------------------------------------------------------
+router.get('/imports/final/status', asyncHandler(async (req, res) => {
+  res.json(await phase15FinalChecklistService.getPhase15FinalStatus());
+}));
+
+router.get('/imports/final/checklist', asyncHandler(async (req, res) => {
+  res.json(await phase15FinalChecklistService.getPhase15FinalChecklist());
+}));
+
+router.post('/imports/final/test', asyncHandler(async (req, res) => {
+  res.json(await phase15FinalChecklistService.runPhase15FinalTest(req.body || {}));
 }));
 
 // -----------------------------------------------------------------------------
