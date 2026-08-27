@@ -15,6 +15,7 @@ const importMemorySearchService = require('../services/phase15-import-memory-sea
 const geminiClaudeImporterService = require('../services/gemini-claude-importer.service');
 const importQualityReviewService = require('../services/phase15-import-quality-review.service');
 const phase15FinalChecklistService = require('../services/phase15-final-checklist.service');
+const phase14SmokeTestService = require('../services/phase14-smoke-test.service');
 const chatgptExportImporterService = require('../services/chatgpt-export-importer.service');
 const importJobsService = require('../services/import-jobs.service');
 const uploadTokensService = require('../services/upload-tokens.service');
@@ -700,5 +701,25 @@ router.get('/imports/status/:jobId', asyncHandler(async (req, res) => {
 // other route above (no browser-direct-access carve-out like the Phase 22-8 upload routes).
 // -----------------------------------------------------------------------------
 router.use('/task-board', require('./task-board.routes'));
+
+// -----------------------------------------------------------------------------
+// Phase 14-1 route recovery: Smoke Test - same silent-404 pattern as the Phase 15-x panels
+// above. phase14-smoke-test.service.js already exports getPhase14SmokeStatus(),
+// getPhase14SmokeChecklist(), and runPhase14SmokeTest() as three separate purpose-built
+// functions (the 15-7 pattern, not 15-6's reconstruct-from-status pattern) - each route
+// below calls its own matching function directly. admin/index.html has always called these
+// three paths (hyphen-joined, not slash-joined like the Operator Manual panel below it).
+// -----------------------------------------------------------------------------
+router.get('/system/phase14-smoke-status', asyncHandler(async (req, res) => {
+  res.json(await phase14SmokeTestService.getPhase14SmokeStatus());
+}));
+
+router.get('/system/phase14-smoke-checklist', asyncHandler(async (req, res) => {
+  res.json(await phase14SmokeTestService.getPhase14SmokeChecklist());
+}));
+
+router.post('/system/phase14-smoke-test', asyncHandler(async (req, res) => {
+  res.json(await phase14SmokeTestService.runPhase14SmokeTest(req.body || {}));
+}));
 
 module.exports = router;
