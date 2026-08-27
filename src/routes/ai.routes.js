@@ -16,6 +16,7 @@ const geminiClaudeImporterService = require('../services/gemini-claude-importer.
 const importQualityReviewService = require('../services/phase15-import-quality-review.service');
 const phase15FinalChecklistService = require('../services/phase15-final-checklist.service');
 const phase14SmokeTestService = require('../services/phase14-smoke-test.service');
+const operatorManualService = require('../services/operator-manual.service');
 const chatgptExportImporterService = require('../services/chatgpt-export-importer.service');
 const importJobsService = require('../services/import-jobs.service');
 const uploadTokensService = require('../services/upload-tokens.service');
@@ -720,6 +721,28 @@ router.get('/system/phase14-smoke-checklist', asyncHandler(async (req, res) => {
 
 router.post('/system/phase14-smoke-test', asyncHandler(async (req, res) => {
   res.json(await phase14SmokeTestService.runPhase14SmokeTest(req.body || {}));
+}));
+
+// -----------------------------------------------------------------------------
+// Phase 14-4 route recovery: Operator Manual - same silent-404 pattern as above.
+// operator-manual.service.js's three exports are synchronous (no async/Promise, unlike
+// every other service wired in this file) - called directly here without await. Also note
+// (flagged during 0-step review, not fixed here - out of scope for route wiring): both
+// getOperatorManualStatus() and testOperatorManual() return a top-level `status` field, but
+// with different shapes (a string vs. a nested object) - admin/index.html's render144()
+// already has to cope with that on the frontend side. admin/index.html calls these three
+// paths slash-joined (not hyphen-joined like the Smoke Test panel above).
+// -----------------------------------------------------------------------------
+router.get('/system/phase14-operator-manual/status', asyncHandler(async (req, res) => {
+  res.json(operatorManualService.getOperatorManualStatus());
+}));
+
+router.get('/system/phase14-operator-manual/checklist', asyncHandler(async (req, res) => {
+  res.json(operatorManualService.getOperatorManualChecklist());
+}));
+
+router.post('/system/phase14-operator-manual/test', asyncHandler(async (req, res) => {
+  res.json(operatorManualService.testOperatorManual());
 }));
 
 module.exports = router;
