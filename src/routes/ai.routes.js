@@ -17,6 +17,7 @@ const importQualityReviewService = require('../services/phase15-import-quality-r
 const phase15FinalChecklistService = require('../services/phase15-final-checklist.service');
 const phase14SmokeTestService = require('../services/phase14-smoke-test.service');
 const operatorManualService = require('../services/operator-manual.service');
+const devMenuFinalService = require('../services/phase14-dev-menu-final.service');
 const chatgptExportImporterService = require('../services/chatgpt-export-importer.service');
 const importJobsService = require('../services/import-jobs.service');
 const uploadTokensService = require('../services/upload-tokens.service');
@@ -743,6 +744,29 @@ router.get('/system/phase14-operator-manual/checklist', asyncHandler(async (req,
 
 router.post('/system/phase14-operator-manual/test', asyncHandler(async (req, res) => {
   res.json(operatorManualService.testOperatorManual());
+}));
+
+// -----------------------------------------------------------------------------
+// Phase 14-3 route recovery: Dev / Diagnostic Menu Final Hide Policy - same silent-404
+// pattern as above. phase14-dev-menu-final.service.js's three exports are synchronous
+// (called without await) and, unlike every other recovered panel so far, don't follow the
+// getXStatus/getXChecklist/runXTest naming convention: getDevMenuPolicy() backs /status
+// (its output IS the flat policy, no nesting), getDevMenuFinalChecklist() backs /checklist
+// (nests that same policy under `policy`), and testDevMenuFinalPolicy() backs /test - the
+// one exception in this whole recovery effort that takes a bare scenario string, not an
+// options object, so `req.body?.scenario` is extracted before the call rather than passing
+// req.body through directly.
+// -----------------------------------------------------------------------------
+router.get('/system/phase14-dev-menu-final/status', asyncHandler(async (req, res) => {
+  res.json(devMenuFinalService.getDevMenuPolicy());
+}));
+
+router.get('/system/phase14-dev-menu-final/checklist', asyncHandler(async (req, res) => {
+  res.json(devMenuFinalService.getDevMenuFinalChecklist());
+}));
+
+router.post('/system/phase14-dev-menu-final/test', asyncHandler(async (req, res) => {
+  res.json(devMenuFinalService.testDevMenuFinalPolicy(req.body?.scenario || 'current'));
 }));
 
 module.exports = router;
