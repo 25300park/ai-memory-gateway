@@ -18,6 +18,7 @@ const phase15FinalChecklistService = require('../services/phase15-final-checklis
 const phase14SmokeTestService = require('../services/phase14-smoke-test.service');
 const operatorManualService = require('../services/operator-manual.service');
 const devMenuFinalService = require('../services/phase14-dev-menu-final.service');
+const menuCleanupService = require('../services/phase14-menu-cleanup.service');
 const chatgptExportImporterService = require('../services/chatgpt-export-importer.service');
 const importJobsService = require('../services/import-jobs.service');
 const uploadTokensService = require('../services/upload-tokens.service');
@@ -767,6 +768,26 @@ router.get('/system/phase14-dev-menu-final/checklist', asyncHandler(async (req, 
 
 router.post('/system/phase14-dev-menu-final/test', asyncHandler(async (req, res) => {
   res.json(devMenuFinalService.testDevMenuFinalPolicy(req.body?.scenario || 'current'));
+}));
+
+// -----------------------------------------------------------------------------
+// Phase 14-2 route recovery: Production Admin Menu Cleanup - same silent-404 pattern as
+// above. phase14-menu-cleanup.service.js's three exports (getProductionMenuCleanupStatus,
+// getProductionMenuCleanupChecklist, runProductionMenuCleanupTest) follow the usual
+// getXStatus/getXChecklist/runXTest naming and are synchronous (called without await).
+// Unlike Dev Menu Final's test, runProductionMenuCleanupTest() takes a full options object
+// ({ scenario }), so req.body is passed through directly like the 15-7-style panels.
+// -----------------------------------------------------------------------------
+router.get('/system/phase14-menu-cleanup/status', asyncHandler(async (req, res) => {
+  res.json(menuCleanupService.getProductionMenuCleanupStatus());
+}));
+
+router.get('/system/phase14-menu-cleanup/checklist', asyncHandler(async (req, res) => {
+  res.json(menuCleanupService.getProductionMenuCleanupChecklist());
+}));
+
+router.post('/system/phase14-menu-cleanup/test', asyncHandler(async (req, res) => {
+  res.json(menuCleanupService.runProductionMenuCleanupTest(req.body || {}));
 }));
 
 module.exports = router;
