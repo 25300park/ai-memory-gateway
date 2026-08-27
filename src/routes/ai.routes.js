@@ -19,6 +19,7 @@ const phase14SmokeTestService = require('../services/phase14-smoke-test.service'
 const operatorManualService = require('../services/operator-manual.service');
 const devMenuFinalService = require('../services/phase14-dev-menu-final.service');
 const menuCleanupService = require('../services/phase14-menu-cleanup.service');
+const phase13FinalService = require('../services/phase13-final.service');
 const chatgptExportImporterService = require('../services/chatgpt-export-importer.service');
 const importJobsService = require('../services/import-jobs.service');
 const uploadTokensService = require('../services/upload-tokens.service');
@@ -788,6 +789,30 @@ router.get('/system/phase14-menu-cleanup/checklist', asyncHandler(async (req, re
 
 router.post('/system/phase14-menu-cleanup/test', asyncHandler(async (req, res) => {
   res.json(menuCleanupService.runProductionMenuCleanupTest(req.body || {}));
+}));
+
+// -----------------------------------------------------------------------------
+// Phase 13 route recovery: Completion / Final Decision - same silent-404 pattern as above,
+// the last of the 19 originally-scanned unwired routes. phase13-final.service.js's three
+// exports (all async) don't share a common URL-segment naming with their function names,
+// so each route below maps explicitly: /phase13-completion-checklist -> getPhase13CompletionChecklist(),
+// /phase13-final-decision -> runPhase13FinalDecision(), /phase13-final-test ->
+// runPhase13FinalTest({scenario}). Unlike every other panel, these three are NOT
+// slash-nested under a shared prefix (no /phase13-final/status style) - admin/index.html
+// calls three fully independent hyphenated paths directly under /system/. The checklist
+// route is GET (admin/index.html calls it with no method override, i.e. fetch's default);
+// the other two are POST like their sibling panels' test/decision actions.
+// -----------------------------------------------------------------------------
+router.get('/system/phase13-completion-checklist', asyncHandler(async (req, res) => {
+  res.json(await phase13FinalService.getPhase13CompletionChecklist());
+}));
+
+router.post('/system/phase13-final-decision', asyncHandler(async (req, res) => {
+  res.json(await phase13FinalService.runPhase13FinalDecision());
+}));
+
+router.post('/system/phase13-final-test', asyncHandler(async (req, res) => {
+  res.json(await phase13FinalService.runPhase13FinalTest(req.body || {}));
 }));
 
 module.exports = router;
