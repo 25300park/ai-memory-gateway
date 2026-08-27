@@ -61,7 +61,12 @@ function testOperatorManual() {
     ok: failed.length === 0,
     phase: '14-4',
     test_status: failed.length === 0 ? 'PASS' : 'FAIL',
-    status,
+    // Named full_status (not status) so it can't collide with getOperatorManualStatus()'s
+    // own top-level `status` field, which is a string ('READY'/'NOT_READY') - this one is
+    // the whole nested status object. Both used to be called `status`, which meant
+    // admin/index.html's render144() picked this (truthy object) over test_status when
+    // rendering /test results, showing "[object Object]" instead of PASS/FAIL.
+    full_status: status,
     failed_items: failed,
     phase14_5_entry_allowed: failed.length === 0,
   };

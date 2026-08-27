@@ -6293,7 +6293,7 @@
       function render144(data) {
         const status = data.status || data.test_status || data.checklist_status || "-";
         set144("phase14OperatorManualStatus", status);
-        set144("phase14OperatorManualFile", data.manual?.exists ? data.manual.file_name : (data.status?.manual?.file_name || "-"));
+        set144("phase14OperatorManualFile", data.manual?.exists ? data.manual.file_name : (data.full_status?.manual?.file_name || "-"));
         set144("phase14OperatorManualEntry", data.phase14_5_entry_allowed === true ? "ALLOWED" : data.phase14_5_entry_allowed === false ? "BLOCKED" : "-");
         set144("phase14OperatorManualInfo", `Phase 14-4 loaded at ${new Date().toLocaleString()}`);
         renderChecklist144(data.checklist || data.status?.checklist || []);
